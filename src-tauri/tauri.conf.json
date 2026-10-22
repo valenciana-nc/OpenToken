@@ -1,0 +1,10 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "OpenToken", "version": "1.0.0", "identifier": "dev.opentoken.desktop",
+  "build": {"beforeDevCommand": "npm run dev", "beforeBuildCommand": "npm run build", "devUrl": "http://127.0.0.1:1420", "frontendDist": "../dist"},
+  "app": {
+    "windows": [{"label": "main", "title": "OpenToken", "width": 454, "height": 760, "minWidth": 380, "minHeight": 480, "visible": false, "decorations": false, "resizable": false, "skipTaskbar": true, "alwaysOnTop": false, "transparent": true, "backgroundColor": "#00000000", "windowEffects": {"effects": ["acrylic"]}}],
+    "security": {"csp": "default-src 'self'; img-src 'self' asset: data:; style-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost; script-src 'self'"}
+  },
+  "bundle": {"active": true, "targets": ["nsis"], "resources": {"../docs/THIRD-PARTY-LICENSES.txt": "THIRD-PARTY-LICENSES.txt", "../docs/THIRD-PARTY.md": "THIRD-PARTY.md", "../LICENSE": "LICENSE.txt"}, "icon": ["icons/icon.ico", "icons/32x32.png", "icons/128x128.png"], "shortDescription": "Your AI limits, a glance away.", "copyright": "2026 OpenToken contributors", "license": "MIT", "windows": {"nsis": {"installMode": "currentUser", "installerHooks": "nsis-hooks.nsh"}}}
+}

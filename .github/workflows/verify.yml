@@ -1,0 +1,28 @@
+name: Verify OpenToken
+on: [push, pull_request, workflow_dispatch]
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: npm ci
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+      - run: npm run check
+      - run: npm run test:e2e
+      - run: npm run desktop:build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OpenToken-windows-x64
+          path: |
+            target/release/opentoken.exe
+            target/release/bundle/nsis/*.exe

@@ -1,0 +1,22 @@
+[workspace]
+members = ["crates/opentoken-core", "src-tauri"]
+resolver = "2"
+
+[workspace.package]
+version = "1.0.0"
+edition = "2021"
+license = "MIT"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full", "test-util"] }
+chrono = { version = "0.4", features = ["serde"] }
+anyhow = "1"
+tracing = "0.1"
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
+strip = true
+panic = "unwind"

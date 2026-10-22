@@ -1,0 +1,1 @@
+{"$schema":"../gen/schemas/desktop-schema.json","identifier":"main","description":"Only the local OpenToken window can use these commands.","windows":["main"],"permissions":["core:default","core:window:allow-hide","core:window:allow-start-dragging","dialog:allow-open"]}

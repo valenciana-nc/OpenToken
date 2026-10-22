@@ -1,0 +1,26 @@
+node_modules/
+dist/
+target/
+src-tauri/gen/
+playwright-report/
+test-results/
+*.log
+.env
+.env.*
+!.env.example
+*.tsbuildinfo
+artifacts/*.exe
+
+# Provider credentials and local OpenToken runtime state must never be published.
+auth.json
+.credentials.json
+credentials.toml
+/settings.json
+/settings.backup.json
+/state.json
+/usage.sqlite3*
+/sign-ins/
+*.pfx
+*.p12
+*.pem
+*.key
