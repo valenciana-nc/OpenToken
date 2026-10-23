@@ -178,6 +178,7 @@ pub enum ReportSource {
     CursorDashboard,
     CopilotInternal,
     GrokCli,
+    GrokCliRenewal,
     DevinCli,
     DevinApp,
     AntigravityLocal,
@@ -287,9 +288,13 @@ impl AccountState {
                 } else {
                     previous
                         .filter(|p| {
-                            p.report
-                                .as_ref()
-                                .is_none_or(|r| r.source != ReportSource::AntigravityCliUsage)
+                            p.report.as_ref().is_none_or(|r| {
+                                !matches!(
+                                    r.source,
+                                    ReportSource::AntigravityCliUsage
+                                        | ReportSource::GrokCliRenewal
+                                )
+                            })
                         })
                         .filter(|p| p.account.same_scope(&account))
                         .and_then(|p| p.report.clone())

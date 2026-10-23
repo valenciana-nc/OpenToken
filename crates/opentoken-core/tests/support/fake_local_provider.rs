@@ -50,6 +50,27 @@ fn muse() {
 #[tokio::main]
 async fn main() {
     let args: Vec<_> = std::env::args().skip(1).collect();
+    if args == ["login", "--device-auth"] || args == ["login", "--oauth"] {
+        let home = PathBuf::from(std::env::var_os("GROK_HOME").expect("isolated Grok home"));
+        assert!(home.is_absolute() && home.to_string_lossy().contains("opentoken-smoke-"));
+        std::fs::create_dir_all(&home).unwrap();
+        for key in [
+            "GROK_CONFIG",
+            "GROK_CONFIG_PATH",
+            "GROK_AUTH_PROVIDER_COMMAND",
+            "GROK_OIDC_ISSUER",
+            "GROK_OAUTH_TOKEN",
+            "XAI_API_KEY",
+        ] {
+            assert!(std::env::var_os(key).is_none());
+        }
+        std::fs::write(home.join("fixture-login-started"), json!({"pid":std::process::id(),"args":args,"stdin":std::io::stdin().is_terminal(),"stdout":std::io::stdout().is_terminal(),"stderr":std::io::stderr().is_terminal()}).to_string()).unwrap();
+        // Synthetic code exchange: never open a browser or contact an auth service.
+        while !home.join("fixture-login-finish").exists() {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        return;
+    }
     if args == ["--version"] || args == ["--print", "/usage", "--output-format", "json"] {
         let home = PathBuf::from(std::env::var_os("USERPROFILE").unwrap());
         assert!(home.is_absolute() && home.to_string_lossy().contains("fixture"));

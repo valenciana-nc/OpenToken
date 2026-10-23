@@ -12,6 +12,7 @@ use notify::{RecursiveMode, Watcher};
 use std::{
     collections::{HashMap, HashSet},
     path::PathBuf,
+    sync::Arc,
     time::Duration,
 };
 use tokio::sync::{mpsc, oneshot, watch};
@@ -75,6 +76,7 @@ pub struct Engine {
     pub settings: watch::Receiver<Settings>,
     pub tracking: crate::tracking::Tracker,
     pub sources: watch::Receiver<crate::monitoring::Inventory>,
+    pub grok_owner: Arc<tokio::sync::Mutex<()>>,
     existing_runs:
         std::sync::Arc<std::sync::Mutex<HashMap<Provider, tokio_util::sync::CancellationToken>>>,
 }
@@ -91,6 +93,7 @@ impl Engine {
             settings,
             tracking: crate::tracking::Tracker::disabled(),
             sources: watch::channel(crate::monitoring::Inventory::default()).1,
+            grok_owner: Default::default(),
             existing_runs: Default::default(),
         }
     }
@@ -118,6 +121,7 @@ impl Engine {
         let (state_tx, state) = watch::channel(Snapshot::default());
         let (settings_tx, settings_rx) = watch::channel(settings.clone());
         let (sources_tx, sources) = watch::channel(crate::monitoring::Inventory::default());
+        let grok_owner = connections.grok_owner.clone();
         tokio::spawn(run(
             storage.clone(),
             settings,
@@ -140,6 +144,7 @@ impl Engine {
             settings: settings_rx,
             tracking,
             sources,
+            grok_owner,
             existing_runs: Default::default(),
         }
     }
@@ -162,6 +167,13 @@ impl Engine {
         consent: bool,
     ) -> Result<crate::monitoring::Outcome> {
         self.connect_existing_mode(Provider::Antigravity, consent, true)
+            .await
+    }
+    pub async fn connect_grok_cli_renewal(
+        &self,
+        consent: bool,
+    ) -> Result<crate::monitoring::Outcome> {
+        self.connect_existing_mode(Provider::Grok, consent, true)
             .await
     }
     async fn connect_existing_mode(
@@ -552,7 +564,13 @@ async fn run(
                     settings
                         .connections
                         .iter()
-                        .filter(|c| c.mode == crate::connections::ConnectionMode::GrokCli)
+                        .filter(|c| {
+                            matches!(
+                                c.mode,
+                                crate::connections::ConnectionMode::GrokCli
+                                    | crate::connections::ConnectionMode::GrokCliRenewal
+                            )
+                        })
                         .filter_map(|c| c.profile.as_deref().map(PathBuf::from)),
                 );
                 if let Some(path) = connections.cursor_watch_path(&settings) {
@@ -779,7 +797,7 @@ async fn run(
                     _ = cancel.cancelled() => Err(anyhow::anyhow!("Source checking cancelled. No new account was connected.")),
                     result = async {
                         if muse_key_endpoint {
-                            match provider{Provider::Muse=>connections.connect_muse_subscription(&settings,consent).await.map(|(s,a)|(s,vec![a])),Provider::Antigravity=>connections.connect_antigravity_cli_usage(&settings,consent).await.map(|(s,a)|(s,vec![a])),_=>Err(anyhow::anyhow!("This operation requires an explicit supported source."))}
+                            match provider{Provider::Grok=>connections.connect_grok_cli_renewal(&settings,consent).await.map(|(s,a)|(s,vec![a])),Provider::Muse=>connections.connect_muse_subscription(&settings,consent).await.map(|(s,a)|(s,vec![a])),Provider::Antigravity=>connections.connect_antigravity_cli_usage(&settings,consent).await.map(|(s,a)|(s,vec![a])),_=>Err(anyhow::anyhow!("This operation requires an explicit supported source."))}
                         } else { connect_existing(&storage,&settings,&connections,&mut codex,&claude,provider,consent).await }
                     } => result,
                 }
@@ -1120,7 +1138,7 @@ async fn run(
                             _ = cancel.cancelled() => Err(anyhow::anyhow!("Source checking cancelled. No new account was connected.")),
                             result = async {
                                 if muse_key_endpoint {
-                                    match provider{Provider::Muse=>connections.connect_muse_subscription(&settings,consent).await.map(|(s,a)|(s,vec![a])),Provider::Antigravity=>connections.connect_antigravity_cli_usage(&settings,consent).await.map(|(s,a)|(s,vec![a])),_=>Err(anyhow::anyhow!("This operation requires an explicit supported source."))}
+                                    match provider{Provider::Grok=>connections.connect_grok_cli_renewal(&settings,consent).await.map(|(s,a)|(s,vec![a])),Provider::Muse=>connections.connect_muse_subscription(&settings,consent).await.map(|(s,a)|(s,vec![a])),Provider::Antigravity=>connections.connect_antigravity_cli_usage(&settings,consent).await.map(|(s,a)|(s,vec![a])),_=>Err(anyhow::anyhow!("This operation requires an explicit supported source."))}
                                 } else { connect_existing(&storage,&settings,&connections,&mut codex,&claude,provider,consent).await }
                             } => result,
                         }

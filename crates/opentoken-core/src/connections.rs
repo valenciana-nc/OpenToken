@@ -16,6 +16,8 @@ mod cursor_personal;
 mod github_personal;
 #[path = "grok_personal.rs"]
 mod grok_personal;
+#[path = "grok_renewal.rs"]
+mod grok_renewal;
 #[path = "session_http.rs"]
 mod session_http;
 pub use grok_personal::{config_home as grok_config_home, executable as find_grok_cli};
@@ -71,6 +73,7 @@ pub enum ConnectionMode {
     CursorApp,
     GithubCli,
     GrokCli,
+    GrokCliRenewal,
     DevinCli,
     DevinApp,
     AntigravityApp,
@@ -161,7 +164,7 @@ pub fn validate_connections(connections: &[Connection]) -> Result<()> {
                                 )
                     })
             }
-            ConnectionMode::GrokCli => {
+            ConnectionMode::GrokCli | ConnectionMode::GrokCliRenewal => {
                 c.provider == Provider::Grok
                     && c.profile.as_deref().is_some_and(|p| {
                         text(p, 2048)
@@ -292,6 +295,8 @@ pub struct Service {
     grok_identity_base: String,
     grok_proxy_base: String,
     grok_sources: Arc<std::sync::Mutex<std::collections::HashMap<String, String>>>,
+    grok_renewal: Arc<grok_renewal::Renewal>,
+    pub(crate) grok_owner: Arc<tokio::sync::Mutex<()>>,
     #[cfg(test)]
     grok_test_home: Option<std::path::PathBuf>,
     gates: Arc<std::sync::Mutex<std::collections::HashMap<Provider, Gate>>>,
@@ -307,6 +312,8 @@ impl Service {
             grok_identity_base: "https://auth.x.ai".into(),
             grok_proxy_base: "https://cli-chat-proxy.grok.com".into(),
             grok_sources: Default::default(),
+            grok_renewal: Default::default(),
+            grok_owner: Default::default(),
             #[cfg(test)]
             grok_test_home: None,
             storage,
@@ -551,10 +558,14 @@ impl Service {
             }
             return result;
         }
-        if c.mode == ConnectionMode::GrokCli {
-            let result = tokio::time::timeout(Duration::from_secs(45), self.fetch_grok_personal(c))
-                .await
-                .unwrap_or_else(|_| Err(Fault::offline()));
+        if matches!(
+            c.mode,
+            ConnectionMode::GrokCli | ConnectionMode::GrokCliRenewal
+        ) {
+            let result =
+                tokio::time::timeout(Duration::from_secs(60), self.fetch_grok_monitored(c))
+                    .await
+                    .unwrap_or_else(|_| Err(Fault::offline()));
             if let Err(fault) = &result {
                 self.pause(c.provider, fault);
             }

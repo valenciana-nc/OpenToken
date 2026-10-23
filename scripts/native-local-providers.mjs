@@ -1,5 +1,5 @@
 // Real-release acceptance using owned synthetic provider processes, never real vendor access.
-import {mkdir,writeFile,readFile,copyFile} from 'node:fs/promises';
+import {mkdir,writeFile,readFile,copyFile,rm} from 'node:fs/promises';
 import {spawn} from 'node:child_process';
 import path from 'node:path';
 import assert from 'node:assert/strict';
@@ -76,6 +76,26 @@ export async function nativeLocalProviders({page,dir,env,restart,wait,focus,pid,
   await invoke(activePage,'cancel_grok_sign_in');await wait(()=>{try{process.kill(contract.pid,0);return false;}catch{return true;}});
   assert.equal((await invoke(activePage,'get_grok_login_status')).phase,'cancelled');assert.equal((await invoke(activePage,'get_settings')).connections.some(c=>c.provider==='grok'),false);
   assert.equal((await invoke(activePage,'get_state')).accounts.length,initial.accounts.length);
+  assert.equal(await activePage.evaluate(async()=>{try{await window.__TAURI_INTERNALS__.invoke('start_grok_sign_in',{consent:true,recover:true,deviceAuth:true});return false;}catch{return true;}}),true);
+  await invoke(activePage,'start_grok_sign_in',{consent:true,deviceAuth:true});
+  let login=await wait(async()=>{try{return JSON.parse(await readFile(path.join(env.GROK_HOME,'fixture-login-started'),'utf8'));}catch{return false;}});
+  assert.deepEqual(login.args,['login','--device-auth']);assert.ok(login.stdin&&login.stdout&&login.stderr);
+  assert.match((await invoke(activePage,'get_grok_login_status')).message,/device code/);
+  await invoke(activePage,'cancel_grok_sign_in');await wait(()=>{try{process.kill(login.pid,0);return false;}catch{return true;}});
+  await rm(path.join(env.GROK_HOME,'fixture-login-started'));
+  await invoke(activePage,'start_grok_sign_in',{consent:true,deviceAuth:false});
+  login=await wait(async()=>{try{return JSON.parse(await readFile(path.join(env.GROK_HOME,'fixture-login-started'),'utf8'));}catch{return false;}});
+  assert.deepEqual(login.args,['login','--oauth']);assert.match((await invoke(activePage,'get_grok_login_status')).message,/FULL return URL/);
+  await writeFile(path.join(env.GROK_HOME,'fixture-login-finish'),'fixture complete without credential');
+  await wait(async()=>(await invoke(activePage,'get_grok_login_status')).phase==='error');
+  assert.match((await invoke(activePage,'get_grok_login_status')).message,/without a usable saved OAuth session/);
+  assert.equal((await invoke(activePage,'get_settings')).connections.some(c=>c.provider==='grok'),false);
+  assert.equal(await activePage.evaluate(async()=>{try{await window.__TAURI_INTERNALS__.invoke('connect_grok_cli_renewal',{consent:false});return false;}catch{return true;}}),true);
+  await invoke(activePage,'show_dashboard');await wait(async()=>(await invoke(activePage,'get_desktop_status')).motion.phase==='open');
+  const grokDeclined=invoke(activePage,'connect_grok_cli_renewal',{consent:true}).then(()=>'',e=>String(e));
+  await wait(async()=>(await invoke(activePage,'get_desktop_status')).modalInteractions>0);await new Promise(r=>setTimeout(r,350));await focus.escape(processId());
+  assert.match(await grokDeclined,/cancelled.*No command was run/);assert.equal((await invoke(activePage,'get_settings')).connections.some(c=>c.mode==='grok_cli_renewal'),false);
+  console.log('PASS: native Grok device/browser command selection, real terminal handles, callback guidance, cancellation, completed-without-session error (no endless wait), and declined renewal grant without any login/quota fabrication.');
   console.log('PASS: real-release native Antigravity app launch/recovery to verified quota and monitoring-only disconnect; Grok model-only owner command with three terminal handles, explicit consent, cancellation/owned-process cleanup and no invented login/quota. Original owned Windows RPC/Muse/restart/privacy acceptance retained. All provider data synthetic.');
  }finally{await writeFile(path.join(dir,'fixture-antigravity-stop'),'stop owned synthetic services').catch(()=>{});if(app.exitCode===null&&app.signalCode===null){app.kill();await new Promise(resolve=>app.once('exit',resolve));}}
 }

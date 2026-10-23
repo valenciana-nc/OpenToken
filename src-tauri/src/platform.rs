@@ -54,6 +54,30 @@ pub fn confirm_antigravity_cli_profile(window: &tauri::WebviewWindow) -> Result<
         Ok(false)
     }
 }
+pub fn confirm_grok_cli_renewal(window: &tauri::WebviewWindow) -> Result<bool> {
+    #[cfg(windows)]
+    {
+        use windows::{
+            core::w,
+            Win32::{
+                Foundation::HWND,
+                UI::WindowsAndMessaging::{
+                    MessageBoxW, IDYES, MB_DEFBUTTON2, MB_ICONWARNING, MB_YESNOCANCEL,
+                },
+            },
+        };
+        let hwnd = window.hwnd()?;
+        let answer = unsafe {
+            MessageBoxW(Some(HWND(hwnd.0)), w!("Allow the installed official Grok CLI to maintain the CURRENT saved Grok account when xAI rejects its access token?\n\nOpenToken will run only grok --version and grok models in the saved profile, at most once per 15 minutes and only after an authentication rejection. The CLI may renew or replace its own saved credentials and may request authentication in its own browser. This is not read-only access. No model prompt or extra grok login command is sent.\n\nIdentity and quota are checked again before anything is shown. A different CLI account is never silently substituted. Provider pauses remain enforced; unknown CLI versions/custom authentication fail closed.\n\nPermission continues after restart until this monitoring connection is disconnected or replaced using Use existing Grok. Backups do not restore it. Cancelling cannot undo an owner-side credential update already completed.\n\nAllow Grok CLI session renewal?"), w!("OpenToken · Grok CLI renewal"), MB_YESNOCANCEL | MB_DEFBUTTON2 | MB_ICONWARNING)
+        };
+        Ok(answer == IDYES)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = window;
+        Ok(false)
+    }
+}
 pub fn confirm_muse_key_endpoint(window: &tauri::WebviewWindow) -> Result<bool> {
     #[cfg(windows)]
     {

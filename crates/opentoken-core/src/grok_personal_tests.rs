@@ -1,8 +1,10 @@
 use super::*;
 use serde_json::json;
+#[path = "grok_renewal_tests.rs"]
+mod renewal_tests;
 fn write_auth(home: &std::path::Path, token: &str, expiry: i64, team: bool) {
     std::fs::create_dir_all(home).unwrap();
-    std::fs::write(home.join("auth.json"),serde_json::to_vec(&json!({"https://auth.x.ai::official-client":{"key":token,"refresh_token":"provider-owned-never-used","expires_at":expiry,"user_id":"user-fixture","principal_type":if team{"team"}else{"user"}}})).unwrap()).unwrap();
+    std::fs::write(home.join("auth.json"),serde_json::to_vec(&json!({"https://auth.x.ai::official-client":{"key":token,"refresh_token":"provider-owned-never-used","expires_at":expiry,"user_id":"user-fixture","oidc_issuer":"https://auth.x.ai","principal_type":if team{"team"}else{"user"}}})).unwrap()).unwrap();
 }
 #[test]
 fn missing_usage_is_not_an_invented_zero() {
@@ -143,10 +145,20 @@ async fn fixture(mode: &'static str) -> Fixture {
             requests.push(uri.path().to_string());
             requests.iter().filter(|p| p.as_str() == uri.path()).count()
         };
-        assert_eq!(
-            headers["authorization"],
-            "Bearer synthetic-grok-token-first"
-        );
+        if s.mode == "renewable" {
+            if headers["authorization"] == "Bearer synthetic-grok-token-first" {
+                return StatusCode::UNAUTHORIZED.into_response();
+            }
+            assert_eq!(
+                headers["authorization"],
+                "Bearer synthetic-grok-token-renewed"
+            );
+        } else {
+            assert_eq!(
+                headers["authorization"],
+                "Bearer synthetic-grok-token-first"
+            );
+        }
         if s.mode == "transient" && uri.path() == "/v1/billing" && count == 1 {
             return StatusCode::BAD_GATEWAY.into_response();
         }

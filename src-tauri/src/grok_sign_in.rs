@@ -13,9 +13,11 @@ use std::{
     time::Duration,
 };
 use tauri::Emitter;
-fn owner_arguments(recover: bool) -> &'static [&'static str] {
+fn owner_arguments(recover: bool, device: bool) -> &'static [&'static str] {
     if recover {
         &["models"]
+    } else if device {
+        &["login", "--device-auth"]
     } else {
         &["login", "--oauth"]
     }
@@ -25,7 +27,9 @@ struct NativeHost {
     storage: Storage,
     app: tauri::AppHandle,
     child: Mutex<Option<crate::login_process::LoginProcess>>,
+    owner: Mutex<Option<tokio::sync::OwnedMutexGuard<()>>>,
     recover: bool,
+    device: bool,
     completed: AtomicBool,
     launched: AtomicBool,
 }
@@ -37,10 +41,10 @@ impl Host for NativeHost {
             .await
     }
     async fn probe(&self) -> Result<String, Fault> {
-        if self.recover && !self.launched.load(Ordering::SeqCst) {
+        if !self.launched.load(Ordering::SeqCst) {
             return Err(Fault::new(
                 FaultKind::NotSignedIn,
-                "Official CLI recovery was explicitly requested.",
+                "An official CLI sign-in/recovery command was explicitly requested.",
             ));
         }
         {
@@ -49,6 +53,7 @@ impl Host for NativeHost {
                 match child.try_wait() {
                     Ok(Some(true)) => {
                         *owned = None;
+                        self.owner.lock().unwrap().take();
                         self.completed.store(true, Ordering::SeqCst);
                     }
                     Ok(Some(false)) => {
@@ -75,7 +80,7 @@ impl Host for NativeHost {
         self.engine
             .grok_sign_in_marker(true)
             .await
-            .map_err(|mut f|{if self.recover&&self.completed.load(Ordering::SeqCst)&&matches!(f.kind,FaultKind::NotSignedIn|FaultKind::NeedsRelogin){f.kind=FaultKind::PermissionDenied;f.message="The official Grok models check finished without an eligible saved OAuth session. Choose Sign in with Grok explicitly; no login fallback was started.".into();}f})
+            .map_err(|mut f|{if self.completed.load(Ordering::SeqCst)&&matches!(f.kind,FaultKind::NotSignedIn|FaultKind::NeedsRelogin){f.kind=FaultKind::PermissionDenied;f.message="The official Grok command finished without a usable saved OAuth session. Try device-code sign-in. OpenToken did not start another login automatically.".into();}f})
             .map(|m| format!("{m}:{}", self.completed.load(Ordering::SeqCst)))
     }
     async fn connect(&self) -> Result<(), Fault> {
@@ -85,10 +90,11 @@ impl Host for NativeHost {
             .map(|_| ())
             .map_err(|e| {
                 let mut f=e.downcast_ref::<Fault>().cloned().unwrap_or_else(||Fault::new(FaultKind::Unknown,e.to_string()));
-                if self.recover&&self.completed.load(Ordering::SeqCst)&&f.kind==FaultKind::NeedsRelogin{f.kind=FaultKind::PermissionDenied;f.message="The official Grok model check did not restore an eligible OAuth session. Choose Sign in with Grok to use its own explicit --oauth flow. No new login was launched automatically.".into();}f
+                if self.completed.load(Ordering::SeqCst)&&matches!(f.kind,FaultKind::NeedsRelogin|FaultKind::NotSignedIn|FaultKind::IdentityChanged){f.kind=FaultKind::PermissionDenied;f.message=if self.recover{"The official Grok model check did not restore an eligible OAuth session. Choose Sign in with Grok explicitly. No new login was launched automatically."}else{"Grok sign-in finished, but its saved session did not pass identity/quota verification. The browser step alone is not a completed connection. Try device-code sign-in; no second login was started automatically."}.into();}f
             })
     }
     async fn open_cursor(&self) -> Result<(), Fault> {
+        let lease = self.engine.grok_owner.clone().try_lock_owned().map_err(|_| Fault::new(FaultKind::Unreadable, "An approved Grok renewal is already running. Wait for it to finish, then try sign-in again."))?;
         let exe=find_grok_cli().ok_or_else(||Fault::new(FaultKind::ToolMissing,"Install the official Grok CLI, then try again. Nothing was installed automatically."))?;
         let home = grok_config_home(&self.storage);
         if !home.is_absolute() {
@@ -101,7 +107,7 @@ impl Host for NativeHost {
             .map_err(|_| Fault::new(FaultKind::Unreadable, "The Grok CLI home is unavailable."))?;
         let child = crate::login_process::LoginProcess::spawn_args(
             &exe,
-            owner_arguments(self.recover),
+            owner_arguments(self.recover, self.device),
             "GROK_HOME",
             &home,
         )
@@ -112,6 +118,7 @@ impl Host for NativeHost {
             )
         })?;
         *self.child.lock().unwrap() = Some(child);
+        *self.owner.lock().unwrap() = Some(lease);
         self.launched.store(true, Ordering::SeqCst);
         Ok(())
     }
@@ -126,7 +133,11 @@ pub fn start(
     app: tauri::AppHandle,
     consent: bool,
     recover: bool,
+    device: bool,
 ) -> Result<Status, String> {
+    if recover && device {
+        return Err("Choose either session recovery or device-code sign-in.".into());
+    }
     if !consent {
         return Err(
             "Start Grok sign-in explicitly to allow read-only CLI-session monitoring.".into(),
@@ -140,7 +151,9 @@ pub fn start(
             storage,
             app,
             child: Mutex::new(None),
+            owner: Mutex::new(None),
             recover,
+            device,
             completed: AtomicBool::new(false),
             launched: AtomicBool::new(false),
         });
@@ -152,8 +165,10 @@ pub fn start(
                 name: "Grok",
                 waiting_message: if recover {
                     "The official Grok models command may renew its own saved access. Finish its window if needed; no inference prompt or automatic new OAuth fallback is requested."
+                } else if device {
+                    "In the Grok terminal, find the device code. Enter that code on the official page Grok opens, then approve sign-in. Leave the terminal open; no browser return code needs to be pasted into OpenToken."
                 } else {
-                    "Finish the official Grok OAuth window/browser. We’ll verify identity and usage automatically."
+                    "Leave the Grok terminal open. If the browser does not return automatically, copy the FULL return URL into the terminal at ‘Paste the URL here if it doesn’t connect’ and press Enter. A code alone is not enough. OpenToken never asks for that code."
                 },
                 waiting_timeout: Duration::from_secs(600),
                 ..Default::default()
@@ -167,7 +182,11 @@ pub fn start(
 mod tests {
     #[test]
     fn owner_commands_match_oauth_scope_and_recovery_has_no_prompt() {
-        assert_eq!(super::owner_arguments(false), ["login", "--oauth"]);
-        assert_eq!(super::owner_arguments(true), ["models"]);
+        assert_eq!(super::owner_arguments(false, false), ["login", "--oauth"]);
+        assert_eq!(
+            super::owner_arguments(false, true),
+            ["login", "--device-auth"]
+        );
+        assert_eq!(super::owner_arguments(true, false), ["models"]);
     }
 }

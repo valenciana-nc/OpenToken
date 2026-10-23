@@ -12,6 +12,7 @@ import CliConnection from './CliConnection';
 import ExistingConnection from './ExistingConnection';
 import MuseSubscription from './MuseSubscription';
 import AntigravityRecovery from './AntigravityRecovery';
+import GrokConnection from './GrokConnection';
 
 type Props={provider:ProviderId;busy:boolean;action:Action;changed:(next:Settings)=>Promise<void>};
 function AuthenticationOptions({ provider, busy, action, changed,initialMode,back,hideAdvanced=false }: Props&{initialMode?:'enterprise'|'billing';back?:()=>void;hideAdvanced?:boolean}) {
@@ -25,8 +26,6 @@ function AuthenticationOptions({ provider, busy, action, changed,initialMode,bac
   const signingIn = cursorLoginActive(login.status);
   const github = useGithubLogin(provider === 'copilot');
   const githubActive = cursorLoginActive(github.status);
-  const grok = useGithubLogin(provider === 'grok', 'grok');
-  const grokActive = cursorLoginActive(grok.status);
   const name = providerDefinition(provider).name;
   const apiKeyProvider = ['zai', 'deepseek', 'kimi', 'opencode'].includes(provider);
   const supported = provider === 'cursor' || provider === 'copilot' || provider === 'grok' || apiKeyProvider;
@@ -39,14 +38,7 @@ function AuthenticationOptions({ provider, busy, action, changed,initialMode,bac
     await changed(next);
   }
   function toggleEnterprise() { setToken(''); setEmail(''); if(back)back();else setEnterprise(value => !value); }
-  if (provider === 'grok') return <div className="cursor-sign-in">
-    <button className="primary cursor-sign-in-button" disabled={busy||grokActive} title="Explicit recovery: run only the installed official Grok models command. Grok may renew its own login or ask you to authenticate in its own window/browser. No model prompt is sent, and OpenToken does not silently run an additional login command; usage is verified afterward." onClick={()=>void action(()=>grok.recover())}>{grokActive?'Recovering…':'Recover Grok session'}</button>
-    <button className="primary cursor-sign-in-button" disabled={busy || grokActive} title="Explicit account setup: open the installed official Grok login --oauth flow, matching this quota reader's auth.x.ai session type. Grok owns consent and credentials; nothing is refreshed by OpenToken itself." onClick={() => void grok.start()}>{grokActive ? <LoaderCircle className="sign-in-spinner" size={17}/> : <ProviderGlyph provider="grok" size={19}/>} {grokActive ? 'Signing in…' : 'Sign in with Grok'}</button>
-    {demo && <small className="sign-in-demo">Sample connection · no real credentials</small>}
-    {grok.status.phase !== 'idle' && <p role="status" aria-label="Grok sign-in status" className={`sign-in-status ${grok.status.phase === 'error' ? 'error' : ''}`}>{grok.status.message}</p>}
-    {cursorLoginCancellable(grok.status) && <button className="text-button" onClick={() => void grok.cancel()}>Cancel sign-in</button>}
-    {grok.status.failure === 'tool_missing' && <button className="text-button" onClick={() => void action(() => command('open_provider_page', { provider:'grok',docs:false }))}>Get Grok CLI</button>}
-  </div>;
+  if (provider === 'grok') return <GrokConnection busy={busy} action={action} changed={changed}/>;
   if (provider === 'copilot' && !copilotBilling) return <div className="cursor-sign-in">
     <button className="primary cursor-sign-in-button" disabled={busy || githubActive} type="button" title="Reuse the official GitHub CLI login, or sign in through its window/browser. GitHub CLI owns credentials and requests its normal permissions. OpenToken only reads identity and the unofficial Copilot quota endpoint." onClick={() => void github.start()}>{githubActive ? <LoaderCircle className="sign-in-spinner" size={17}/> : <ProviderGlyph provider="copilot" size={19}/>} {githubActive ? 'Signing in…' : 'Sign in with GitHub'}</button>
     {demo && <small className="sign-in-demo">Sample connection · no real credentials</small>}

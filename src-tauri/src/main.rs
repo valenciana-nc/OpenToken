@@ -284,13 +284,14 @@ async fn disconnect_provider(
         state.engine.settings.borrow().connections.iter().any(|c| {
             c.id == id && c.mode == opentoken_core::connections::ConnectionMode::GithubCli
         });
-    let grok = state
-        .engine
-        .settings
-        .borrow()
-        .connections
-        .iter()
-        .any(|c| c.id == id && c.mode == opentoken_core::connections::ConnectionMode::GrokCli);
+    let grok = state.engine.settings.borrow().connections.iter().any(|c| {
+        c.id == id
+            && matches!(
+                c.mode,
+                opentoken_core::connections::ConnectionMode::GrokCli
+                    | opentoken_core::connections::ConnectionMode::GrokCliRenewal
+            )
+    });
     let antigravity = state
         .engine
         .settings
@@ -518,6 +519,7 @@ fn get_grok_login_status(
 fn start_grok_sign_in(
     consent: bool,
     recover: Option<bool>,
+    device_auth: Option<bool>,
     app: tauri::AppHandle,
     state: tauri::State<'_, Arc<AppState>>,
 ) -> Result<opentoken_core::cursor_login::Status, String> {
@@ -528,7 +530,46 @@ fn start_grok_sign_in(
         app,
         consent,
         recover.unwrap_or(false),
+        device_auth.unwrap_or(false),
     )
+}
+#[tauri::command]
+async fn connect_grok_cli_renewal(
+    consent: bool,
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+) -> Result<opentoken_core::monitoring::Outcome, String> {
+    if !consent {
+        return Err("Approve repeated Grok CLI renewal explicitly.".into());
+    }
+    if state.grok_login.status().phase.active() {
+        return Err("Finish or cancel Grok sign-in before enabling CLI renewal.".into());
+    }
+    let window = app
+        .get_webview_window("main")
+        .ok_or("Dashboard window is unavailable.")?;
+    let hold = state.flyout.hold();
+    let allowed =
+        tauri::async_runtime::spawn_blocking(move || platform::confirm_grok_cli_renewal(&window))
+            .await;
+    drop(hold);
+    defer_dismiss(&app);
+    if !allowed
+        .map_err(|_| "Grok renewal review stopped.")?
+        .map_err(|_| "Grok renewal review is unavailable.")?
+    {
+        return Err(
+            "Grok CLI renewal cancelled. No command was run and no permission was saved.".into(),
+        );
+    }
+    if state.grok_login.status().phase.active() {
+        return Err("Grok sign-in is active; no renewal was started.".into());
+    }
+    state
+        .engine
+        .connect_grok_cli_renewal(true)
+        .await
+        .map_err(|e| e.to_string())
 }
 #[tauri::command]
 fn cancel_grok_sign_in(
@@ -843,11 +884,13 @@ fn update_trays(app: &tauri::AppHandle, snapshot: &Snapshot, state: &AppState) {
                     r.source == opentoken_core::model::ReportSource::CopilotInternal
                 }) {
                     "GitHub CLI · Unofficial quota · "
-                } else if s
-                    .report
-                    .as_ref()
-                    .is_some_and(|r| r.source == opentoken_core::model::ReportSource::GrokCli)
-                {
+                } else if s.report.as_ref().is_some_and(|r| {
+                    matches!(
+                        r.source,
+                        opentoken_core::model::ReportSource::GrokCli
+                            | opentoken_core::model::ReportSource::GrokCliRenewal
+                    )
+                }) {
                     "Grok CLI · Private credit API · "
                 } else if s
                     .report
@@ -1223,7 +1266,7 @@ fn run() -> anyhow::Result<()> {
         if args.iter().any(|s|s=="quit"){app.exit(0);return;}
         if args.iter().any(|s|s=="refresh"){let state=app.state::<Arc<AppState>>();let engine=state.engine.clone();tauri::async_runtime::spawn(async move{engine.refresh().await;});return;}
         if args.iter().any(|s|s=="settings"){let _=app.emit("navigate","settings");}show(app,None);
-    })).invoke_handler(tauri::generate_handler![get_state,get_settings,get_sources,connect_existing_usage,connect_antigravity_cli_usage,connect_muse_subscription,cancel_existing_usage,set_history_source,refresh,save_settings,connect_provider,get_cursor_login_status,start_cursor_sign_in,cancel_cursor_sign_in,connect_cursor_personal,open_cursor_sign_in,disconnect_provider,open_provider_page,save_account_order,set_dashboard_pinned,get_spending,get_tracking,hide_dashboard,show_dashboard,dashboard_ready,choose_login_folder,import_quotatray,get_cli_login_status,start_cli_sign_in,cancel_cli_sign_in,disconnect_cli_account,get_github_login_status,start_github_sign_in,cancel_github_sign_in,get_grok_login_status,start_grok_sign_in,cancel_grok_sign_in,get_antigravity_login_status,start_antigravity_sign_in,cancel_antigravity_sign_in,open_log,open_tray_settings,get_desktop_status,quit])
+    })).invoke_handler(tauri::generate_handler![get_state,get_settings,get_sources,connect_existing_usage,connect_antigravity_cli_usage,connect_muse_subscription,cancel_existing_usage,set_history_source,refresh,save_settings,connect_provider,get_cursor_login_status,start_cursor_sign_in,cancel_cursor_sign_in,connect_cursor_personal,open_cursor_sign_in,disconnect_provider,open_provider_page,save_account_order,set_dashboard_pinned,get_spending,get_tracking,hide_dashboard,show_dashboard,dashboard_ready,choose_login_folder,import_quotatray,get_cli_login_status,start_cli_sign_in,cancel_cli_sign_in,disconnect_cli_account,get_github_login_status,start_github_sign_in,cancel_github_sign_in,get_grok_login_status,start_grok_sign_in,cancel_grok_sign_in,connect_grok_cli_renewal,get_antigravity_login_status,start_antigravity_sign_in,cancel_antigravity_sign_in,open_log,open_tray_settings,get_desktop_status,quit])
     .on_menu_event(|app,event|match event.id().as_ref(){
         "show"=>show(app,None),"settings"=>{let _=app.emit("navigate","settings");show(app,None);},
         "refresh"=>{let e=app.state::<Arc<AppState>>().engine.clone();tauri::async_runtime::spawn(async move{e.refresh().await;});},

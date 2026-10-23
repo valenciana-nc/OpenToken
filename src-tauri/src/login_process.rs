@@ -25,6 +25,16 @@ const CLEARED: &[&str] = &[
     "XAI_API_KEY",
     "GROK_BASE_URL",
     "GROK_API_BASE",
+    "GROK_CONFIG",
+    "GROK_CONFIG_PATH",
+    "GROK_AUTH_PROVIDER_COMMAND",
+    "GROK_AUTH_PROVIDER_LABEL",
+    "GROK_AUTH_TOKEN_TTL",
+    "GROK_OIDC_ISSUER",
+    "GROK_OIDC_CLIENT_ID",
+    "GROK_LOG_FILE",
+    "GROK_DEBUG_LOG",
+    "RUST_LOG",
     "GH_TOKEN",
     "GITHUB_TOKEN",
     "GH_ENTERPRISE_TOKEN",
@@ -96,8 +106,14 @@ impl LoginProcess {
             block.extend(wide(&pair)?);
         }
         block.push(0);
+        let mut title = wide(OsStr::new(if variable == "GROK_HOME" {
+            "OpenToken - Grok sign-in"
+        } else {
+            "OpenToken - official sign-in"
+        }))?;
         let startup = STARTUPINFOW {
             cb: std::mem::size_of::<STARTUPINFOW>() as u32,
+            lpTitle: PWSTR(title.as_mut_ptr()),
             ..Default::default()
         };
         let mut info = PROCESS_INFORMATION::default();

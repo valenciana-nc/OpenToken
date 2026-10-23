@@ -166,6 +166,7 @@ impl Storage {
                         c.mode,
                         crate::connections::ConnectionMode::MuseDevice
                             | crate::connections::ConnectionMode::AntigravityCliUsage
+                            | crate::connections::ConnectionMode::GrokCliRenewal
                     ) && settings.connections.contains(c)
                 });
                 atomic_json(&self.dir.join("settings.json.bak"), &old)?;

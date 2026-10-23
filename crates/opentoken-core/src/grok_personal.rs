@@ -29,6 +29,7 @@ struct Entry {
     expires_at: Option<Value>,
     user_id: Option<String>,
     principal_type: Option<String>,
+    oidc_issuer: Option<String>,
 }
 impl Drop for Entry {
     fn drop(&mut self) {
@@ -39,6 +40,7 @@ struct Session {
     token: Zeroizing<String>,
     subject: Option<String>,
     expires: Option<i64>,
+    standard_issuer: bool,
 }
 fn expiry_hint(value: Option<&Value>) -> Option<i64> {
     let v = value?;
@@ -133,6 +135,7 @@ fn read(home: &std::path::Path) -> Result<Session, Fault> {
         token: Zeroizing::new(entry.key.clone()),
         subject: entry.user_id.clone(),
         expires,
+        standard_issuer: entry.oidc_issuer.as_deref() == Some("https://auth.x.ai"),
     })
 }
 fn source_marker(session: &Session) -> String {
@@ -144,11 +147,12 @@ impl Service {
     /// Changes invalidate cached identity-bound quota, never reset the network budget.
     pub(crate) async fn grok_scope_changes(&self, settings: &Settings) -> HashSet<String> {
         let mut changed = HashSet::new();
-        for c in settings
-            .connections
-            .iter()
-            .filter(|c| c.mode == ConnectionMode::GrokCli)
-        {
+        for c in settings.connections.iter().filter(|c| {
+            matches!(
+                c.mode,
+                ConnectionMode::GrokCli | ConnectionMode::GrokCliRenewal
+            )
+        }) {
             let Some(home) = c.profile.as_deref().map(std::path::Path::new) else {
                 continue;
             };
@@ -229,8 +233,12 @@ impl Service {
             tokio::time::timeout(Duration::from_secs(45), async {
                 let (c, report) = self.grok_existing_reading().await?;
                 let mut next = settings.clone();
-                next.connections
-                    .retain(|old| old.mode != ConnectionMode::GrokCli || old.scope != c.scope);
+                next.connections.retain(|old| {
+                    !matches!(
+                        old.mode,
+                        ConnectionMode::GrokCli | ConnectionMode::GrokCliRenewal
+                    ) || old.scope != c.scope
+                });
                 next.connections.push(c.clone());
                 next.validate()?;
                 self.storage.save_settings(&next)?;
@@ -266,6 +274,77 @@ impl Service {
         let report = self.fetch_grok_personal(&c).await?;
         Ok((c, report))
     }
+    /// Explicit upgrade of the already saved identity; never silently follow a new CLI user.
+    pub async fn connect_grok_cli_renewal(
+        &self,
+        settings: &Settings,
+        consent: bool,
+    ) -> Result<(Settings, AccountState)> {
+        if !consent {
+            bail!("Approve repeated Grok CLI session renewal explicitly.");
+        }
+        self.begin_verification(Provider::Grok)?;
+        let home = self.grok_home();
+        let mut c = settings
+            .connections
+            .iter()
+            .find(|c| {
+                matches!(
+                    c.mode,
+                    ConnectionMode::GrokCli | ConnectionMode::GrokCliRenewal
+                ) && c.profile.as_deref().is_some_and(|p| {
+                    crate::storage::path_key(std::path::Path::new(p))
+                        == crate::storage::path_key(&home)
+                })
+            })
+            .cloned()
+            .ok_or_else(|| {
+                Fault::new(
+                    FaultKind::NotSignedIn,
+                    "Connect Grok first, then approve CLI renewal for that saved account.",
+                )
+            })?;
+        c.mode = ConnectionMode::GrokCliRenewal;
+        // fetch enforces provider backoff, one deadline, identity and local-source checks.
+        let report = self.fetch(&c).await?;
+        let mut next = settings.clone();
+        next.connections.retain(|old| old.id != c.id);
+        next.connections.push(c.clone());
+        self.storage.save_settings(&next)?;
+        Ok((
+            next.clone(),
+            AccountState::apply(c.account(&next), Ok(report), None),
+        ))
+    }
+    pub(super) async fn fetch_grok_monitored(&self, c: &Connection) -> Result<Report, Fault> {
+        match self.fetch_grok_personal(c).await {
+            Err(f)
+                if f.kind == FaultKind::NeedsRelogin
+                    && c.mode == ConnectionMode::GrokCliRenewal =>
+            {
+                let home = c
+                    .profile
+                    .as_deref()
+                    .map(std::path::Path::new)
+                    .ok_or_else(invalid)?;
+                let before = self.grok_session(home).await?;
+                if before.subject.as_deref() != Some(c.subject.as_str()) {
+                    return Err(Fault::changed());
+                }
+                if !before.standard_issuer {
+                    return Err(Fault::new(FaultKind::PermissionDenied, "CLI renewal requires the saved first-party auth.x.ai session. No client was launched."));
+                }
+                let _owner = self.grok_owner.clone().try_lock_owned().map_err(|_| Fault::new(FaultKind::NeedsRelogin, "Finish the active official Grok sign-in. Automatic renewal will not run concurrently."))?;
+                self.grok_renewal.run(home).await?;
+                let after = self.grok_session(home).await?;
+                if after.subject != before.subject || !after.standard_issuer {
+                    return Err(Fault::changed());
+                }
+                self.fetch_grok_personal(c).await
+            }
+            result => result,
+        }
+    }
     pub(super) async fn fetch_grok_personal(&self, c: &Connection) -> Result<Report, Fault> {
         let home = c
             .profile
@@ -294,7 +373,10 @@ impl Service {
                 "Grok credit quota read",
             )
             .await?;
-        let report = parse(&value)?;
+        let mut report = parse(&value)?;
+        if c.mode == ConnectionMode::GrokCliRenewal {
+            report.source = ReportSource::GrokCliRenewal;
+        }
         let after = self.grok_identity(&session.token).await?;
         let local = self.grok_session(home).await?;
         if before != after || *local.token != *session.token || local.subject != session.subject {
