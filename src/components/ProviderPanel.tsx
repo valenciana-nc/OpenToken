@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { ChevronRight, Info, Plus } from 'lucide-react';
 import type { Settings, Snapshot } from '../types';
 import { age } from '../format';
@@ -8,9 +8,21 @@ import { monitoringHealth } from '../monitoringHealth';
 
 export default function ProviderPanel({ selected, snapshot, settings, now, example, savingOrder, reorder, manage, connection }:  {
   selected: ProviderId; snapshot: Snapshot; settings: Settings; now: number; example: boolean; savingOrder: boolean;
-  reorder: (ids: string[]) => Promise<void>; manage: () => void; connection?: ReactNode;
+  reorder: (ids: string[]) => Promise<void>; manage: () => void;
+  /** Connection controls; a function receives `true` when the user is adding another account. */
+  connection?: ReactNode | ((adding: boolean) => ReactNode);
 }) {
   const definition = providerDefinition(selected);
+  const [adding, setAdding] = useState(false);
+  const addRef = useRef<HTMLDivElement>(null);
+  // The sign-in opens below the account list; bring it into view so the click visibly does something.
+  // Deferred one frame: a smooth scroll started in the same commit is cancelled by the layout change.
+  useEffect(() => {
+    if (!adding) return;
+    const frame = requestAnimationFrame(() => addRef.current?.scrollIntoView?.({ block: 'nearest', behavior: 'smooth' }));
+    return () => cancelAnimationFrame(frame);
+  }, [adding]);
+  const connect = (add: boolean) => typeof connection === 'function' ? connection(add) : connection;
   const accounts = snapshot.accounts.filter(s => s.account.provider === selected);
   const health = monitoringHealth(accounts, settings.connections.some(c => c.provider === selected));
   const latest = accounts.flatMap(a => a.report ? [a.report.observedAt] : []).sort().at(-1) ?? null;
@@ -33,7 +45,11 @@ export default function ProviderPanel({ selected, snapshot, settings, now, examp
       {selected === 'grok' && accounts.some(a => a.status === 'ready' && a.report && !a.report.plan && !a.report.quotas.some(q => q.percent != null)) && <p className="muted-text">xAI reported no subscription plan or usage meter for {accounts.filter(a => a.status === 'ready' && a.report && !a.report.plan && !a.report.quotas.some(q => q.percent != null)).map(a => a.account.email ?? a.account.label).join(', ')}, only a prepaid balance. If your SuperGrok or X Premium plan is on a different account, sign in to the Grok CLI with that account.</p>}
       {health.label && <div className="monitoring-health" role="status" aria-label={`${definition.name} monitoring status`}><strong>{health.label}</strong><p>{health.message}</p></div>}
       <AccountList accounts={accounts} order={settings.accountOrder} now={now} example={example} saving={savingOrder} reorder={reorder}/>
-      {health.setup && (connection ?? <div className="provider-empty"><h3>{snapshot.refreshing ? 'Finding your sign-ins…' : `Connect ${definition.name}`}</h3><p>Choose the provider’s connection option to verify identity and available usage.</p><button className="text-button" onClick={manage}><Plus size={15}/>Add an account</button></div>)}
-    </> : (connection ?? <div className="provider-empty"><h3>{definition.name} isn’t connected</h3><p>OpenToken doesn’t have a live {definition.name} connector yet. Working connector types are listed in Providers & settings; no usage or cost data is shown for unsupported providers.</p><button className="text-button" onClick={manage}><Plus size={15}/>Manage available connections</button></div>)}
+      {!health.setup && accounts.length > 0 && connection != null && <div className="add-account" ref={addRef}>
+        {adding ? <>{connect(true)}<button className="text-button" type="button" onClick={() => setAdding(false)}>Done adding accounts</button></>
+          : <button className="add-account-button" type="button" onClick={() => setAdding(true)}><Plus size={15} aria-hidden="true"/>Add another {definition.name} account</button>}
+      </div>}
+      {health.setup && (connect(false) ?? <div className="provider-empty"><h3>{snapshot.refreshing ? 'Finding your sign-ins…' : `Connect ${definition.name}`}</h3><p>Choose the provider’s connection option to verify identity and available usage.</p><button className="text-button" onClick={manage}><Plus size={15}/>Add an account</button></div>)}
+    </> : (connect(false) ?? <div className="provider-empty"><h3>{definition.name} isn’t connected</h3><p>OpenToken doesn’t have a live {definition.name} connector yet. Working connector types are listed in Providers & settings; no usage or cost data is shown for unsupported providers.</p><button className="text-button" onClick={manage}><Plus size={15}/>Manage available connections</button></div>)}
   </section>;
 }
