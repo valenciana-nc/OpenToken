@@ -55,6 +55,13 @@ struct Session {
 }
 impl Session {
     fn parse(token: Zeroizing<String>) -> Result<Self, Fault> {
+        // Newer Cursor builds store the sign-in as an encrypted `a:b:ciphertext`
+        // envelope instead of a JWT (which never contains ':'). Signing in again
+        // just writes another encrypted value, so "expired, sign in again" would
+        // send the user in circles. OpenToken does not decrypt other apps' secrets.
+        if token.contains(':') {
+            return Err(encrypted());
+        }
         if !(16..=16384).contains(&token.len())
             || !token
                 .bytes()
@@ -73,10 +80,19 @@ impl Session {
             exp: i64,
         }
         let claims: Claims = serde_json::from_slice(&bytes).map_err(|_| expired())?;
-        if claims.exp <= Utc::now().timestamp().saturating_add(60)
-            || chrono::DateTime::from_timestamp(claims.exp, 0).is_none()
-        {
+        let Some(expires) = chrono::DateTime::from_timestamp(claims.exp, 0) else {
             return Err(expired());
+        };
+        if claims.exp <= Utc::now().timestamp().saturating_add(60) {
+            // Say exactly what happened: the saved token is well-formed but past its
+            // expiry. Cursor keeps a cached email, so it can look signed in when it isn't.
+            return Err(Fault::new(
+                FaultKind::NeedsRelogin,
+                format!(
+                    "Cursor's saved sign-in expired on {}. Cursor still shows your email, but the session is no longer valid. In Cursor, log out and log back in (profile menu → Log out). OpenToken picks up the new sign-in automatically.",
+                    expires.format("%b %-d, %Y")
+                ),
+            ));
         }
         let subject = subject(&claims.sub).ok_or_else(expired)?;
         Ok(Self { token, subject })
@@ -112,6 +128,9 @@ fn subject(value: &str) -> Option<String> {
 }
 fn expired() -> Fault {
     Fault::new(FaultKind::NeedsRelogin,"The Cursor app session is expired or invalid. Sign in again in Cursor, then reconnect. OpenToken never refreshes Cursor's tokens.")
+}
+fn encrypted() -> Fault {
+    Fault::new(FaultKind::PermissionDenied,"This Cursor version encrypts its saved sign-in, so OpenToken can no longer read personal Cursor usage from the app. Your Cursor login is fine; signing in again won't change this. Cursor Enterprise members can still connect with an admin API key.")
 }
 fn unreadable() -> Fault {
     Fault::new(FaultKind::Unreadable,"Cursor's local sign-in could not be read safely. Open Cursor and try again. Its database was not copied or modified.")
