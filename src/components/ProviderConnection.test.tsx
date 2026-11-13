@@ -28,4 +28,17 @@ describe('discovery-first provider capabilities',()=>{
     const expired:AccountState={account:{id:'c',provider:'cursor',label:'c',email:null,sources:[]},status:'faulted',report:null,fault:{kind:'needs_relogin',message:'expired',retryAfterSecs:null}};
     expect(renderToStaticMarkup(<ProviderConnection {...props} provider="cursor" accounts={[expired]}/>)).toContain('This opens the Cursor app.');
   });
+  it('offers an Add account button once a provider has a working account, opening that provider’s sign-in',()=>{
+    const ready=(provider:AccountState['account']['provider']):AccountState=>({account:{id:provider,provider,label:provider,email:'me@example.test',sources:[]},status:'ready',fault:null,report:{plan:null,observedAt:new Date().toISOString(),quotas:[{id:'session',label:'Session',percent:10,value:null,unit:null,resetsAt:null}]}});
+    const panel=(provider:'codex'|'grok')=>renderToStaticMarkup(<ProviderPanel selected={provider} snapshot={{...emptySnapshot,accounts:[ready(provider)]}} settings={defaultSettings} now={Date.now()} example={false} savingOrder={false} reorder={async()=>{}} manage={()=>{}} connection={(adding:boolean)=><ProviderConnection {...props} provider={provider} adding={adding}/>}/>);
+    expect(panel('codex')).toContain('Add another Codex account');
+    expect(panel('grok')).toContain('Add another Grok account');
+    expect(renderToStaticMarkup(<ProviderPanel selected="codex" snapshot={emptySnapshot} settings={defaultSettings} now={Date.now()} example={false} savingOrder={false} reorder={async()=>{}} manage={()=>{}} connection={(adding:boolean)=><ProviderConnection {...props} provider="codex" adding={adding}/>}/>)).not.toContain('Add another Codex account');
+    expect(renderToStaticMarkup(<ProviderConnection {...props} provider="claude" adding/>)).toContain('Sign in with Claude');
+    expect(renderToStaticMarkup(<ProviderConnection {...props} provider="grok" adding/>)).toContain('Sign in another Grok account');
+    expect(renderToStaticMarkup(<ProviderConnection {...props} provider="deepseek" adding/>)).toContain('<input');
+    const devin=renderToStaticMarkup(<ProviderConnection {...props} provider="devin" adding/>);
+    expect(devin).toContain('tracks one account at a time');
+    expect(devin).toContain('Use existing Devin');
+  });
 });
