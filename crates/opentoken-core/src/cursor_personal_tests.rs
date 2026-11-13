@@ -790,3 +790,29 @@ fn summary_uses_reported_values_only_and_keeps_unknown_and_zero_distinct() {
         assert!(r.quotas.iter().all(|q| q.resets_at.is_none()));
     }
 }
+#[test]
+fn an_expired_cursor_token_says_when_it_expired_instead_of_a_generic_error() {
+    let jwt = token("user_fixture", 1_700_000_000);
+    let fault = Session::parse(Zeroizing::new(jwt)).err().unwrap();
+    assert_eq!(fault.kind, FaultKind::NeedsRelogin);
+    assert!(
+        fault.message.contains("expired on Nov 14, 2023"),
+        "{}",
+        fault.message
+    );
+    let garbled = Session::parse(Zeroizing::new("not-a-jwt-at-all-xxxxxxxx".into()))
+        .err()
+        .unwrap();
+    assert!(garbled.message.contains("expired or invalid"));
+}
+#[test]
+fn an_encrypted_cursor_sign_in_is_reported_as_unsupported_not_expired() {
+    let fault = Session::parse(Zeroizing::new(
+        "djEw:aXZpdg:Y2lwaGVydGV4dGNpcGhlcnRleHQ=".into(),
+    ))
+    .err()
+    .unwrap();
+    assert_eq!(fault.kind, FaultKind::PermissionDenied);
+    assert!(fault.message.contains("encrypts its saved sign-in"));
+    assert!(!fault.message.contains("expired"));
+}

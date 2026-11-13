@@ -91,4 +91,10 @@ describe('reference provider picker', () => {
     expect(providerRemaining([account(20), expired], 'codex')).toBe(80);
     expect(providerRemaining([expired], 'codex')).toBeNull();
   });
+  it('ignores a balance-only account (no percentage meter) when drawing a sibling account’s bar', () => {
+    const metered: AccountState = { account: { id: 'gmail', provider: 'grok', label: 'Grok', email: null, sources: [] }, status: 'ready', fault: null, report: { plan: null, observedAt: new Date().toISOString(), quotas: [{ id: 'grok_credit_usage', label: 'Reported credit usage', percent: 2, resetsAt: null, value: null, unit: null }] } };
+    const balanceOnly: AccountState = { ...metered, account: { ...metered.account, id: 'school' }, report: { ...metered.report!, quotas: [{ id: 'grok_prepaid_balance', label: 'Prepaid balance · USD', percent: null, resetsAt: null, value: 0, unit: 'USD' }] } };
+    expect(providerRemaining([metered, balanceOnly], 'grok')).toBe(98);
+    expect(providerRemaining([balanceOnly], 'grok')).toBeNull();
+  });
 });

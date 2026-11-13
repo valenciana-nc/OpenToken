@@ -17,5 +17,7 @@ export function monitoringHealth(accounts: AccountState[], saved: boolean) {
 
 /** How many of a provider's accounts need the user to sign in again (or fix access). */
 export function signInNeeded(accounts: AccountState[], provider: string) {
-  return accounts.filter(a => a.account.provider === provider && a.fault && ['needs_relogin', 'not_signed_in', 'identity_changed', 'permission_denied'].includes(a.fault.kind)).length;
+  // An encrypted Cursor sign-in is not fixed by signing in again; don't prompt for it.
+  const unsupported = (a: AccountState) => a.account.provider === 'cursor' && !!a.fault?.message.includes('encrypts its saved sign-in');
+  return accounts.filter(a => a.account.provider === provider && a.fault && !unsupported(a) && ['needs_relogin', 'not_signed_in', 'identity_changed', 'permission_denied'].includes(a.fault.kind)).length;
 }

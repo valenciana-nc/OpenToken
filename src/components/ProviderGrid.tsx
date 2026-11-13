@@ -20,7 +20,10 @@ export function providerRemaining(accounts: AccountState[], id: ProviderId) {
   // An account with no reading at all (e.g. an expired sign-in) has nothing to
   // misrepresent, so it must not hide a working account's bar. Stale or partial
   // readings still suppress the bar rather than paint a misleading minimum.
-  const connected = accounts.filter(s => s.account.provider === id && s.report != null);
+  // Likewise an account that reports only amounts (e.g. a $0 prepaid balance) has no
+  // percentage meter at all; it must not hide a sibling account's bar either.
+  const meterless = (s: AccountState) => s.report!.quotas.length > 0 && s.report!.quotas.every(q => q.percent == null && q.value != null);
+  const connected = accounts.filter(s => s.account.provider === id && s.report != null && !meterless(s));
   if (!connected.length || connected.some(s => s.status !== 'ready')) return null;
   const values = connected.flatMap(s => {
     const value = s.report ? remaining(summaryQuota(s.report, id)?.percent ?? null) : null;
