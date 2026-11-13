@@ -10,6 +10,44 @@ pub fn config_home(storage: &Storage) -> std::path::PathBuf {
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| storage.user_home.join(".grok"))
 }
+/// A private Grok CLI home for one more account, so several Grok accounts can
+/// stay signed in side by side (the CLI keeps one login per `GROK_HOME`).
+/// Reuses a never-signed-in folder from an abandoned attempt before creating one.
+pub fn new_profile_home(storage: &Storage, settings: &Settings) -> Result<std::path::PathBuf> {
+    let base = storage.dir.join("profiles").join("grok");
+    std::fs::create_dir_all(&base)?;
+    let used: std::collections::HashSet<_> = settings
+        .connections
+        .iter()
+        .filter_map(|c| c.profile.as_deref())
+        .map(|p| crate::storage::path_key(std::path::Path::new(p)))
+        .collect();
+    let mut count = 0;
+    for entry in std::fs::read_dir(&base)?.flatten().take(128) {
+        let path = entry.path();
+        if !entry
+            .file_type()
+            .is_ok_and(|t| t.is_dir() && !t.is_symlink())
+        {
+            continue;
+        }
+        count += 1;
+        if !used.contains(&crate::storage::path_key(&path)) && !path.join("auth.json").exists() {
+            return Ok(path);
+        }
+    }
+    if count >= 100 {
+        bail!("There are too many saved Grok sign-ins. Disconnect one first.");
+    }
+    let id = hash(&format!(
+        "{:?}-{}",
+        std::time::SystemTime::now(),
+        std::process::id()
+    ));
+    let home = base.join(&id[..24.min(id.len())]);
+    std::fs::create_dir_all(&home)?;
+    Ok(home)
+}
 pub fn executable() -> Option<std::path::PathBuf> {
     let name = if cfg!(windows) { "grok.exe" } else { "grok" };
     let mut paths: Vec<_> = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
@@ -186,14 +224,19 @@ impl Service {
             .await
             .map_err(|_| Fault::offline())?
     }
-    pub async fn grok_sign_in_marker(&self, consent: bool) -> Result<String, Fault> {
+    pub async fn grok_sign_in_marker(
+        &self,
+        consent: bool,
+        home: Option<&std::path::Path>,
+    ) -> Result<String, Fault> {
         if !consent {
             return Err(Fault::new(
                 FaultKind::PermissionDenied,
                 "Start Grok sign-in explicitly.",
             ));
         }
-        let session = self.grok_session(&self.grok_home()).await?;
+        let home = home.map_or_else(|| self.grok_home(), std::path::Path::to_path_buf);
+        let session = self.grok_session(&home).await?;
         // Presence/change marker only; authenticated quota verification decides readiness.
         let material = Zeroizing::new(format!("{}:{:?}", session.token.as_str(), session.expires));
         Ok(hash(&material))
@@ -224,6 +267,7 @@ impl Service {
         &self,
         settings: &Settings,
         consent: bool,
+        home: Option<&std::path::Path>,
     ) -> Result<(Settings, AccountState)> {
         if !consent {
             bail!("Start Grok sign-in explicitly.");
@@ -231,13 +275,15 @@ impl Service {
         self.begin_verification(Provider::Grok)?;
         let result: Result<(Settings, AccountState)> =
             tokio::time::timeout(Duration::from_secs(45), async {
-                let (c, report) = self.grok_existing_reading().await?;
+                let (c, report) = self.grok_existing_reading(home).await?;
                 let mut next = settings.clone();
+                // One entry per Grok profile folder, and one per account: signing an
+                // account in again elsewhere moves it rather than duplicating it.
                 next.connections.retain(|old| {
                     !matches!(
                         old.mode,
                         ConnectionMode::GrokCli | ConnectionMode::GrokCliRenewal
-                    ) || old.scope != c.scope
+                    ) || (old.scope != c.scope && old.subject != c.subject)
                 });
                 next.connections.push(c.clone());
                 next.validate()?;
@@ -256,8 +302,11 @@ impl Service {
         }
         result
     }
-    pub(super) async fn grok_existing_reading(&self) -> Result<(Connection, Report), Fault> {
-        let home = self.grok_home();
+    pub(super) async fn grok_existing_reading(
+        &self,
+        home: Option<&std::path::Path>,
+    ) -> Result<(Connection, Report), Fault> {
+        let home = home.map_or_else(|| self.grok_home(), std::path::Path::to_path_buf);
         let session = self.grok_session(&home).await?;
         let (subject, login) = self.grok_identity(&session.token).await?;
         if session.subject.as_deref().is_some_and(|s| s != subject) {

@@ -31,7 +31,7 @@ pub(crate) async fn connect(
             Ok((settings, vec![account]))
         }
         Provider::Grok => {
-            let (settings, account) = service.connect_grok_personal(current, true).await?;
+            let (settings, account) = service.connect_grok_personal(current, true, None).await?;
             Ok((settings, vec![account]))
         }
         Provider::Codex | Provider::Claude => {

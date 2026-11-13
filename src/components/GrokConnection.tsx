@@ -16,6 +16,8 @@ export default function GrokConnection({busy,action,changed}:{busy:boolean;actio
  return <div className="cursor-sign-in">
   <button className="primary cursor-sign-in-button" disabled={busy||active||checking} title="Device-code sign-in using the installed official Grok CLI. Enter the terminal’s code on the official website; no callback code needs to be pasted into OpenToken." onClick={()=>void login.start({deviceAuth:true})}>{active?<LoaderCircle className="sign-in-spinner" size={17}/>:<ProviderGlyph provider="grok" size={19}/>} {active?'Signing in…':'Sign in with Grok'}</button>
   <p className="hint">Uses a device code: enter the code from the Grok terminal on the official page it opens. Keep that terminal open until sign-in finishes.</p>
+  <button className="text-button" disabled={busy||active||checking} title="Signs in a different Grok account into its own private profile, so it is tracked alongside the accounts you already connected. Existing Grok sign-ins are not changed." onClick={()=>void login.start({deviceAuth:true,addAccount:true})}>Add another Grok account</button>
+  <p className="hint">Each extra account gets its own profile, so every Grok account stays signed in and keeps its own usage.</p>
   {demo&&<small className="sign-in-demo">Sample connection · no real credentials</small>}
   {login.status.phase!=='idle'&&<p role="status" aria-label="Grok sign-in status" className={`sign-in-status ${login.status.phase==='error'?'error':''}`}>{login.status.message}</p>}
   {cursorLoginCancellable(login.status)&&<button className="text-button" onClick={()=>void login.cancel()}>Cancel sign-in</button>}

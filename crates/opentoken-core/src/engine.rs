@@ -38,9 +38,17 @@ pub enum Command {
     CursorPersonal(bool, oneshot::Sender<Result<Settings>>),
     CursorProbe(bool, oneshot::Sender<std::result::Result<String, Fault>>),
     GithubProbe(bool, oneshot::Sender<std::result::Result<String, Fault>>),
-    GrokProbe(bool, oneshot::Sender<std::result::Result<String, Fault>>),
+    GrokProbe(
+        bool,
+        Option<std::path::PathBuf>,
+        oneshot::Sender<std::result::Result<String, Fault>>,
+    ),
     VerificationWait(Provider, oneshot::Sender<u64>),
-    GrokPersonal(bool, oneshot::Sender<Result<Settings>>),
+    GrokPersonal(
+        bool,
+        Option<std::path::PathBuf>,
+        oneshot::Sender<Result<Settings>>,
+    ),
     AntigravityProbe(
         crate::connections::AntigravityClient,
         bool,
@@ -287,10 +295,15 @@ impl Engine {
         }
         rx.await.unwrap_or(60)
     }
-    pub async fn grok_sign_in_marker(&self, consent: bool) -> std::result::Result<String, Fault> {
+    /// `home` selects a separate Grok profile (another account); `None` is the default CLI home.
+    pub async fn grok_sign_in_marker(
+        &self,
+        consent: bool,
+        home: Option<std::path::PathBuf>,
+    ) -> std::result::Result<String, Fault> {
         let (tx, rx) = oneshot::channel();
         self.commands
-            .send(Command::GrokProbe(consent, tx))
+            .send(Command::GrokProbe(consent, home, tx))
             .await
             .map_err(|_| Fault::offline())?;
         rx.await.map_err(|_| Fault::offline())?
@@ -318,10 +331,14 @@ impl Engine {
             .await?;
         rx.await?
     }
-    pub async fn connect_grok_personal(&self, consent: bool) -> Result<Settings> {
+    pub async fn connect_grok_personal(
+        &self,
+        consent: bool,
+        home: Option<std::path::PathBuf>,
+    ) -> Result<Settings> {
         let (tx, rx) = oneshot::channel();
         self.commands
-            .send(Command::GrokPersonal(consent, tx))
+            .send(Command::GrokPersonal(consent, home, tx))
             .await?;
         rx.await?
     }
@@ -853,14 +870,18 @@ async fn run(
             Some(Command::VerificationWait(provider, reply)) => {
                 let _ = reply.send(connections.verification_wait_secs(provider));
             }
-            Some(Command::GrokProbe(consent, reply)) => {
+            Some(Command::GrokProbe(consent, home, reply)) => {
                 if !reply.is_closed() {
-                    let _ = reply.send(connections.grok_sign_in_marker(consent).await);
+                    let _ = reply.send(
+                        connections
+                            .grok_sign_in_marker(consent, home.as_deref())
+                            .await,
+                    );
                 }
             }
-            Some(Command::GrokPersonal(consent, reply)) => {
+            Some(Command::GrokPersonal(consent, home, reply)) => {
                 let result = connections
-                    .connect_grok_personal(&settings, consent)
+                    .connect_grok_personal(&settings, consent, home.as_deref())
                     .await
                     .map(|(next, account)| {
                         connection_updated(
@@ -1202,14 +1223,18 @@ async fn run(
                     Command::VerificationWait(provider, reply) => {
                         let _ = reply.send(connections.verification_wait_secs(provider));
                     }
-                    Command::GrokProbe(consent, reply) => {
+                    Command::GrokProbe(consent, home, reply) => {
                         if !reply.is_closed() {
-                            let _ = reply.send(connections.grok_sign_in_marker(consent).await);
+                            let _ = reply.send(
+                                connections
+                                    .grok_sign_in_marker(consent, home.as_deref())
+                                    .await,
+                            );
                         }
                     }
-                    Command::GrokPersonal(consent, reply) => {
+                    Command::GrokPersonal(consent, home, reply) => {
                         let result = connections
-                            .connect_grok_personal(&settings, consent)
+                            .connect_grok_personal(&settings, consent, home.as_deref())
                             .await
                             .map(|(next, account)| {
                                 connection_updated(

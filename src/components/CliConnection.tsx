@@ -17,6 +17,7 @@ export default function CliConnection({ provider, busy, action }: { provider: Cl
       {active ? 'Signing in…' : `Sign in with ${name}`}
     </button>
     <span className="visually-hidden" id={hint}>{description}</span>
+    <p className="hint">Each sign-in adds a separate {name} account with its own usage. Accounts you already connected stay connected.</p>
     {demo && <small className="sign-in-demo">Sample connection · no real credentials</small>}
     {login.status.phase !== 'idle' && <p className={`sign-in-status ${login.status.phase === 'error' ? 'error' : ''}`} role="status" aria-label={`${name} sign-in status`}>{login.status.message}</p>}
     {cursorLoginCancellable(login.status) && <button className="text-button" type="button" onClick={() => void login.cancel()}>Cancel sign-in</button>}
