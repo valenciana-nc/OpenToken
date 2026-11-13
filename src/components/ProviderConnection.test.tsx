@@ -19,4 +19,13 @@ describe('discovery-first provider capabilities',()=>{
     const fresh=renderToStaticMarkup(<ProviderConnection {...props} provider="muse"/>);
     expect(fresh).toContain('Not signed in yet?');
   });
+  it('explains a Grok account that reports only a balance, and that Cursor sign-in happens in the Cursor app',()=>{
+    const grok:AccountState={account:{id:'grok-fixture',provider:'grok',email:'school@example.test',label:'Grok',sources:[]},status:'ready',fault:null,report:{plan:null,source:'grok_cli',observedAt:new Date().toISOString(),quotas:[{id:'grok_prepaid_balance',label:'Prepaid balance · USD',percent:null,value:0,unit:'USD',resetsAt:null}]}};
+    const html=renderToStaticMarkup(<ProviderPanel selected="grok" snapshot={{...emptySnapshot,accounts:[grok]}} settings={defaultSettings} now={Date.now()} example={false} savingOrder={false} reorder={async()=>{}} manage={()=>{}}/>);
+    expect(html).toContain('no subscription plan or usage meter for school@example.test');
+    const subscribed=renderToStaticMarkup(<ProviderPanel selected="grok" snapshot={{...emptySnapshot,accounts:[{...grok,report:{...grok.report!,plan:'SuperGrok'}}]}} settings={defaultSettings} now={Date.now()} example={false} savingOrder={false} reorder={async()=>{}} manage={()=>{}}/>);
+    expect(subscribed).not.toContain('no subscription plan');
+    const expired:AccountState={account:{id:'c',provider:'cursor',label:'c',email:null,sources:[]},status:'faulted',report:null,fault:{kind:'needs_relogin',message:'expired',retryAfterSecs:null}};
+    expect(renderToStaticMarkup(<ProviderConnection {...props} provider="cursor" accounts={[expired]}/>)).toContain('This opens the Cursor app.');
+  });
 });
