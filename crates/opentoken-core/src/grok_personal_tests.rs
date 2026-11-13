@@ -32,7 +32,7 @@ async fn provider_acceptance_not_cached_expiry_decides_usage_access() {
         std::fs::write(f.home.join("auth.json"), serde_json::to_vec(&data).unwrap()).unwrap();
         let (_, state) = f
             .service
-            .connect_grok_personal(&Settings::default(), true)
+            .connect_grok_personal(&Settings::default(), true, None)
             .await
             .unwrap();
         assert_eq!(state.status, Status::Ready);
@@ -40,7 +40,7 @@ async fn provider_acceptance_not_cached_expiry_decides_usage_access() {
     let f = fixture("rejected").await;
     let result = f
         .service
-        .connect_grok_personal(&Settings::default(), true)
+        .connect_grok_personal(&Settings::default(), true, None)
         .await
         .err()
         .unwrap();
@@ -232,10 +232,10 @@ async fn fixture(mode: &'static str) -> Fixture {
 async fn actual_http_connect_refresh_and_disconnect_do_not_copy_or_modify_grok_credentials() {
     let h = fixture("ok").await;
     let before = std::fs::read(h.home.join("auth.json")).unwrap();
-    assert!(h.service.grok_sign_in_marker(false).await.is_err());
+    assert!(h.service.grok_sign_in_marker(false, None).await.is_err());
     assert!(h
         .service
-        .connect_grok_personal(&Settings::default(), false)
+        .connect_grok_personal(&Settings::default(), false, None)
         .await
         .is_err());
     let (settings, state) = h
@@ -246,6 +246,7 @@ async fn actual_http_connect_refresh_and_disconnect_do_not_copy_or_modify_grok_c
                 ..Default::default()
             },
             true,
+            None,
         )
         .await
         .unwrap();
@@ -277,7 +278,7 @@ async fn grok_temporary_quota_failure_retries_but_rejected_auth_never_does() {
     let before = std::fs::read(f.home.join("auth.json")).unwrap();
     let (settings, state) = f
         .service
-        .connect_grok_personal(&Settings::default(), true)
+        .connect_grok_personal(&Settings::default(), true, None)
         .await
         .unwrap();
     assert_eq!(state.status, Status::Ready);
@@ -295,7 +296,7 @@ async fn grok_temporary_quota_failure_retries_but_rejected_auth_never_does() {
     let f = fixture("rejected").await;
     assert!(f
         .service
-        .connect_grok_personal(&Settings::default(), true)
+        .connect_grok_personal(&Settings::default(), true, None)
         .await
         .is_err());
     assert_eq!(f.requests.lock().unwrap().len(), 1);
@@ -305,7 +306,7 @@ async fn grok_source_changes_are_local_only_ignore_partial_writes_and_expiry_hin
     let f = fixture("ok").await;
     let (settings, state) = f
         .service
-        .connect_grok_personal(&Settings::default(), true)
+        .connect_grok_personal(&Settings::default(), true, None)
         .await
         .unwrap();
     let calls = f.requests.lock().unwrap().len();
@@ -330,11 +331,40 @@ async fn identity_changes_rotated_credentials_auth_errors_and_unknown_quota_neve
         let h = fixture(mode).await;
         assert!(
             h.service
-                .connect_grok_personal(&Settings::default(), true)
+                .connect_grok_personal(&Settings::default(), true, None)
                 .await
                 .is_err(),
             "{mode}"
         );
         assert!(!h.service.storage.dir.join("settings.json").exists());
     }
+}
+#[test]
+fn extra_grok_accounts_get_their_own_profile_and_reuse_only_abandoned_ones() {
+    let t = tempfile::tempdir().unwrap();
+    let storage = Storage {
+        dir: t.path().join("data"),
+        user_home: t.path().join("home"),
+    };
+    let mut settings = Settings::default();
+    let first = new_profile_home(&storage, &settings).unwrap();
+    assert!(first.is_dir());
+    assert!(first.starts_with(storage.dir.join("profiles").join("grok")));
+    // An abandoned, never-signed-in attempt is reused instead of piling up folders.
+    assert_eq!(new_profile_home(&storage, &settings).unwrap(), first);
+    // A folder bound to a connection or holding a sign-in is never handed out again.
+    let mut c = Connection::new(
+        Provider::Grok,
+        "s".into(),
+        "a@example.test".into(),
+        "grok:x".into(),
+    );
+    c.mode = ConnectionMode::GrokCli;
+    c.profile = Some(first.to_string_lossy().into_owned());
+    settings.connections.push(c);
+    let second = new_profile_home(&storage, &settings).unwrap();
+    assert_ne!(second, first);
+    std::fs::write(second.join("auth.json"), "{}").unwrap();
+    let third = new_profile_home(&storage, &settings).unwrap();
+    assert!(third != first && third != second);
 }

@@ -524,6 +524,7 @@ fn start_grok_sign_in(
     consent: bool,
     recover: Option<bool>,
     device_auth: Option<bool>,
+    add_account: Option<bool>,
     app: tauri::AppHandle,
     state: tauri::State<'_, Arc<AppState>>,
 ) -> Result<opentoken_core::cursor_login::Status, String> {
@@ -532,9 +533,12 @@ fn start_grok_sign_in(
         state.engine.clone(),
         state.storage.clone(),
         app,
-        consent,
-        recover.unwrap_or(false),
-        device_auth.unwrap_or(false),
+        grok_sign_in::Request {
+            consent,
+            recover: recover.unwrap_or(false),
+            device: device_auth.unwrap_or(false),
+            add_account: add_account.unwrap_or(false),
+        },
     )
 }
 #[tauri::command]

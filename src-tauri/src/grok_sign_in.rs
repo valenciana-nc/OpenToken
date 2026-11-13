@@ -1,5 +1,5 @@
 use opentoken_core::{
-    connections::{find_grok_cli, grok_config_home},
+    connections::{find_grok_cli, grok_config_home, new_grok_profile_home},
     cursor_login::{self, Flow, Host, Options, Status},
     engine::Engine,
     model::{Fault, FaultKind},
@@ -30,6 +30,8 @@ struct NativeHost {
     owner: Mutex<Option<tokio::sync::OwnedMutexGuard<()>>>,
     recover: bool,
     device: bool,
+    /// A separate Grok profile folder when adding another account; `None` uses the default CLI home.
+    home: Option<std::path::PathBuf>,
     completed: AtomicBool,
     launched: AtomicBool,
 }
@@ -78,14 +80,14 @@ impl Host for NativeHost {
             }
         }
         self.engine
-            .grok_sign_in_marker(true)
+            .grok_sign_in_marker(true, self.home.clone())
             .await
             .map_err(|mut f|{if self.completed.load(Ordering::SeqCst)&&matches!(f.kind,FaultKind::NotSignedIn|FaultKind::NeedsRelogin){f.kind=FaultKind::PermissionDenied;f.message="The official Grok command finished without a usable saved OAuth session. Try device-code sign-in. OpenToken did not start another login automatically.".into();}f})
             .map(|m| format!("{m}:{}", self.completed.load(Ordering::SeqCst)))
     }
     async fn connect(&self) -> Result<(), Fault> {
         self.engine
-            .connect_grok_personal(true)
+            .connect_grok_personal(true, self.home.clone())
             .await
             .map(|_| ())
             .map_err(|e| {
@@ -96,7 +98,10 @@ impl Host for NativeHost {
     async fn open_cursor(&self) -> Result<(), Fault> {
         let lease = self.engine.grok_owner.clone().try_lock_owned().map_err(|_| Fault::new(FaultKind::Unreadable, "An approved Grok renewal is already running. Wait for it to finish, then try sign-in again."))?;
         let exe=find_grok_cli().ok_or_else(||Fault::new(FaultKind::ToolMissing,"Install the official Grok CLI, then try again. Nothing was installed automatically."))?;
-        let home = grok_config_home(&self.storage);
+        let home = self
+            .home
+            .clone()
+            .unwrap_or_else(|| grok_config_home(&self.storage));
         if !home.is_absolute() {
             return Err(Fault::new(
                 FaultKind::Unreadable,
@@ -126,17 +131,35 @@ impl Host for NativeHost {
         let _ = self.app.emit("grok-login-changed", status);
     }
 }
+/// What the user asked the Grok sign-in to do.
+#[derive(Default, Clone, Copy)]
+pub struct Request {
+    pub consent: bool,
+    /// Run the official model check to let the CLI renew its own session.
+    pub recover: bool,
+    /// Device-code sign-in instead of the browser return-URL flow.
+    pub device: bool,
+    /// Sign a different account into its own new Grok profile.
+    pub add_account: bool,
+}
 pub fn start(
     flow: Arc<Flow>,
     engine: Engine,
     storage: Storage,
     app: tauri::AppHandle,
-    consent: bool,
-    recover: bool,
-    device: bool,
+    request: Request,
 ) -> Result<Status, String> {
+    let Request {
+        consent,
+        recover,
+        device,
+        add_account,
+    } = request;
     if recover && device {
         return Err("Choose either session recovery or device-code sign-in.".into());
+    }
+    if recover && add_account {
+        return Err("Recovery applies to an existing Grok sign-in, not a new account.".into());
     }
     if !consent {
         return Err(
@@ -144,6 +167,18 @@ pub fn start(
         );
     }
     if let Some(run) = flow.begin_named("Grok") {
+        let home = if add_account {
+            let settings = engine.settings.borrow().clone();
+            match new_grok_profile_home(&storage, &settings) {
+                Ok(home) => Some(home),
+                Err(e) => {
+                    let _ = flow.reset();
+                    return Err(e.to_string());
+                }
+            }
+        } else {
+            None
+        };
         let status = flow.status();
         let _ = app.emit("grok-login-changed", status.clone());
         let host = Arc::new(NativeHost {
@@ -154,6 +189,7 @@ pub fn start(
             owner: Mutex::new(None),
             recover,
             device,
+            home,
             completed: AtomicBool::new(false),
             launched: AtomicBool::new(false),
         });

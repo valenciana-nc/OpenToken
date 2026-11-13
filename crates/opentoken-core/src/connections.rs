@@ -20,7 +20,10 @@ mod grok_personal;
 mod grok_renewal;
 #[path = "session_http.rs"]
 mod session_http;
-pub use grok_personal::{config_home as grok_config_home, executable as find_grok_cli};
+pub use grok_personal::{
+    config_home as grok_config_home, executable as find_grok_cli,
+    new_profile_home as new_grok_profile_home,
+};
 #[path = "local_providers.rs"]
 mod local_providers;
 pub use local_providers::UsageProbe as AntigravityUsageProbe;
@@ -647,7 +650,7 @@ impl Service {
         let result = tokio::time::timeout(Duration::from_secs(45), async {
             match provider {
                 Provider::Cursor => self.cursor_app_read(None).await.map(|(_, r)| r),
-                Provider::Grok => self.grok_existing_reading().await.map(|(_, r)| r),
+                Provider::Grok => self.grok_existing_reading(None).await.map(|(_, r)| r),
                 Provider::Claude => {
                     let mut settings = Settings { claude_enabled: true, ..Settings::default() };
                     settings.claude_homes = crate::monitoring::cli_homes(&self.storage,&settings,Provider::Claude).into_iter().map(|p|p.to_string_lossy().into_owned()).collect();
