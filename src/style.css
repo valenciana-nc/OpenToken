@@ -230,6 +230,7 @@ footer button { font-size: 10px; padding: 0; color: var(--muted); }
 .panel h2 { display: flex; align-items: center; justify-content: space-between; gap: 7px; font-size: 17px; font-weight: 600; margin-bottom: 12px; }
 .count { color: var(--muted); font-size: 13px; }
 .muted-text { font-size: 13px; line-height: 1.65; color: var(--muted); margin: 6px 0 13px; }
+.sign-in-needed { font-size: 13px; line-height: 1.5; font-weight: 550; color: #ab714b; background: #b8784010; border-radius: 8px; padding: 8px 10px; margin: 10px 0; }
 label:not(.toggle-row) { display: block; font-size: 13px; font-weight: 550; margin: 13px 0; }
 input:not([type='checkbox']), select { display: block; width: 100%; padding: 9px 10px; background: var(--field); color: var(--text); border: 1px solid var(--border); border-bottom-color: var(--muted); border-radius: 4px; font-size: 13px; margin-top: 6px; }
 input::placeholder { color: var(--muted); opacity: .8; }

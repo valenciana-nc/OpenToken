@@ -86,4 +86,9 @@ describe('reference provider picker', () => {
     expect(providerRemaining([account(Number.NaN)], 'codex')).toBeNull();
     expect(providerRemaining([account(20, 'stale')], 'codex')).toBeNull();
   });
+  it('shows a working account’s bar even when another sign-in for that provider has expired', () => {
+    const expired: AccountState = { ...account(null, 'faulted'), report: null, account: { ...account(null).account, id: 'expired' } };
+    expect(providerRemaining([account(20), expired], 'codex')).toBe(80);
+    expect(providerRemaining([expired], 'codex')).toBeNull();
+  });
 });

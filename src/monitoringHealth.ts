@@ -14,3 +14,8 @@ export function monitoringHealth(accounts: AccountState[], saved: boolean) {
       : waiting ? cached ? 'Temporary read problem. Showing the last successful reading, not live usage. OpenToken retries automatically and respects provider pauses.' : 'No current reading is available. OpenToken retries automatically; you do not need to reconnect for a temporary read problem.' : null,
   };
 }
+
+/** How many of a provider's accounts need the user to sign in again (or fix access). */
+export function signInNeeded(accounts: AccountState[], provider: string) {
+  return accounts.filter(a => a.account.provider === provider && a.fault && ['needs_relogin', 'not_signed_in', 'identity_changed', 'permission_denied'].includes(a.fault.kind)).length;
+}

@@ -5,9 +5,9 @@ import type {Action} from '../ui';
 import {command,demo} from '../bridge';
 import {providerDefinition} from '../providers';
 
-export default function ExistingConnection({provider,busy,action,changed,recovery,historyOnly=false}:{provider:Provider;busy:boolean;action:Action;changed:(next:Settings)=>Promise<void>;recovery?:ReactNode;historyOnly?:boolean}){
+export default function ExistingConnection({provider,busy,action,changed,recovery,historyOnly=false,needsSignIn=0}:{provider:Provider;busy:boolean;action:Action;changed:(next:Settings)=>Promise<void>;recovery?:ReactNode;historyOnly?:boolean;needsSignIn?:number}){
  const [found,setFound]=useState('');
- const [recover,setRecover]=useState(false);
+ const [recover,setRecover]=useState(!historyOnly&&needsSignIn>0);
  const [checking,setChecking]=useState(false);
  const cancelled=useRef(false);
  const name=providerDefinition(provider).name;
@@ -38,6 +38,8 @@ export default function ExistingConnection({provider,busy,action,changed,recover
   {checking&&<button className="text-button" onClick={()=>void cancel()}>Cancel source check</button>}
   {demo&&<small className="sign-in-demo">Sample source · no real credentials</small>}
   {found&&<p role="status" aria-label={`${name} source status`}>{found}</p>}
-  {recovery&&<><button className="connection-advanced-toggle" disabled={busy||checking} onClick={()=>setRecover(!recover)}>{recover?'Hide account setup':'Account setup (only if needed)'}</button>{recover&&recovery}</>}
+  {!historyOnly&&needsSignIn>0&&<p className="sign-in-needed" role="status">{needsSignIn===1?`1 ${name} account needs you to sign in again.`:`${needsSignIn} ${name} accounts need you to sign in again.`}{recovery?' Use the sign-in below.':provider==='antigravity'?' Use “Sign in or recover session” below, then check again.':` Log in with the official ${name} app or CLI, then press “Use existing ${name}”.`}</p>}
+  {!historyOnly&&!recovery&&!needsSignIn&&(provider==='devin'||provider==='muse')&&<p className="muted-text">Not signed in yet? Log in with the official {name} app or CLI first, then press “Use existing {name}”.</p>}
+  {recovery&&<><button className="connection-advanced-toggle" disabled={busy||checking} onClick={()=>setRecover(!recover)}>{recover?'Hide sign-in options':'Sign in or add an account'}</button>{recover&&recovery}</>}
  </div>;
 }

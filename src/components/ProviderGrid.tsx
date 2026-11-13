@@ -17,7 +17,10 @@ export function summaryQuota(report: Report, id: ProviderId): Quota | undefined 
   return eligible.reduce<Quota | undefined>((primary, q) => !primary || q.percent! > primary.percent! ? q : primary, undefined);
 }
 export function providerRemaining(accounts: AccountState[], id: ProviderId) {
-  const connected = accounts.filter(s => s.account.provider === id);
+  // An account with no reading at all (e.g. an expired sign-in) has nothing to
+  // misrepresent, so it must not hide a working account's bar. Stale or partial
+  // readings still suppress the bar rather than paint a misleading minimum.
+  const connected = accounts.filter(s => s.account.provider === id && s.report != null);
   if (!connected.length || connected.some(s => s.status !== 'ready')) return null;
   const values = connected.flatMap(s => {
     const value = s.report ? remaining(summaryQuota(s.report, id)?.percent ?? null) : null;

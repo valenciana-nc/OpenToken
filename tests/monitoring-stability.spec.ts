@@ -1,4 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
+import { openAccountSetup } from './helpers/recovery';
 
 async function fault(page: Page, provider: string, kind: string | null, cached = true) {
   await page.evaluate(detail => dispatchEvent(new CustomEvent('opentoken-demo-source-fault', { detail })), { provider, kind, cached });
@@ -47,7 +48,7 @@ for (const name of ['Copilot', 'Grok']) {
     await expect(page.getByRole('progressbar')).toHaveCount(0);
     await expect(page.getByRole('button', { name: name === 'Grok' ? 'Recover Grok session' : 'Sign in with GitHub', exact: true })).toHaveCount(0);
     expect(await page.evaluate(() => localStorage.getItem('opentoken.demo.settings'))).toBe(before);
-    await page.getByRole('button', { name: 'Account setup (only if needed)', exact: true }).click();
+    await openAccountSetup(page);
     await expect(page.getByRole('button', { name: name === 'Grok' ? 'Recover Grok session' : 'Sign in with GitHub', exact: true })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Cancel sign-in', exact: true })).toHaveCount(0);
   });

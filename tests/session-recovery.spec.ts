@@ -3,7 +3,7 @@ import{openAccountSetup}from'./helpers/recovery';
 test('Antigravity owner recovery is explicit, cancellable, survives navigation and verifies before persistence',async({page})=>{
  await page.goto('/?demo&antigravityRecovery=waiting');await page.getByRole('tab',{name:'Antigravity',exact:true}).click();
  expect(await page.evaluate(()=>localStorage.getItem('opentoken.demo.settings'))).toBeNull();
- await page.getByText('Session recovery (only if needed)',{exact:true}).click();await page.getByRole('button',{name:'Recover with Antigravity IDE',exact:true}).click();
+ if(await page.locator('details[open]',{hasText:'Sign in or recover session'}).count()===0)await page.getByText('Sign in or recover session',{exact:true}).click();await page.getByRole('button',{name:'Recover with Antigravity IDE',exact:true}).click();
  await expect(page.getByRole('status',{name:'Antigravity recovery status'})).toContainText('selected official client');await expect(page.getByRole('button',{name:'Recover with Antigravity IDE',exact:true})).toBeDisabled();
  await page.getByRole('button',{name:'Cancel recovery',exact:true}).click();await page.evaluate(()=>dispatchEvent(new Event('opentoken-demo-antigravity-ready')));await expect(page.locator('.account-card')).toHaveCount(0);
  await page.getByRole('button',{name:'Recover with Antigravity IDE',exact:true}).click();await page.getByRole('tab',{name:'Codex',exact:true}).click();await page.evaluate(()=>dispatchEvent(new Event('opentoken-demo-antigravity-ready')));await page.getByRole('tab',{name:'Antigravity',exact:true}).click();
