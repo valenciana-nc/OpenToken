@@ -54,6 +54,7 @@ function AuthenticationOptions({ provider, busy, action, changed,initialMode,bac
       {signingIn ? 'Signing in…' : 'Sign in with Cursor'}
     </button>
     <span className="visually-hidden" id={hint}>{cursorDescription}</span>
+    <p className="muted-text">This opens the Cursor app. Sign in there with the account you want to track. OpenToken reads usage from the Cursor app’s sign-in and connects automatically once you’re signed in.</p>
     {demo && <small className="sign-in-demo">Sample connection · no real credentials</small>}
     {login.status.phase !== 'idle' && <p className={`sign-in-status ${login.status.phase === 'error' ? 'error' : ''}`} role="status" aria-label="Cursor sign-in status">{login.status.message}</p>}
     {cursorLoginCancellable(login.status) && <button className="text-button" type="button" onClick={() => void login.cancel()}>Cancel sign-in</button>}
