@@ -338,6 +338,41 @@ pub fn foreground(window: &tauri::WebviewWindow) -> crate::flyout::Foreground {
     crate::flyout::Foreground::Other
 }
 
+/// Capture on the UI thread; the watchdog must never ask Tauri for a synchronous getter.
+pub fn current_thread_id() -> u32 {
+    #[cfg(windows)]
+    {
+        unsafe { windows::Win32::System::Threading::GetCurrentThreadId() }
+    }
+    #[cfg(not(windows))]
+    {
+        0
+    }
+}
+/// Cross-thread read-only native query, including when a menu's nested loop defers Tao tasks.
+pub fn native_interaction_active(thread: u32) -> bool {
+    #[cfg(windows)]
+    {
+        use windows::Win32::UI::WindowsAndMessaging::*;
+        let mut info = GUITHREADINFO {
+            cbSize: std::mem::size_of::<GUITHREADINFO>() as u32,
+            ..Default::default()
+        };
+        unsafe {
+            GetGUIThreadInfo(thread, &mut info).is_ok()
+                && (info.flags
+                    & (GUI_INMENUMODE | GUI_INMOVESIZE | GUI_POPUPMENUMODE | GUI_SYSTEMMENUMODE))
+                    .0
+                    != 0
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = thread;
+        false
+    }
+}
+
 /// Read Windows Accessibility > Animation effects for every transition; never change it.
 pub fn animations_enabled() -> bool {
     #[cfg(windows)]

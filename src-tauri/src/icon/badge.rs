@@ -11,7 +11,7 @@ pub(super) fn render(value: Option<u8>, error: bool, stale: bool, light: bool) -
         [29, 39, 53, 246]
     };
     let mut accent = if light {
-        [0, 103, 192, 255]
+        [0, 120, 212, 255]
     } else {
         [96, 205, 255, 255]
     };
@@ -26,12 +26,6 @@ pub(super) fn render(value: Option<u8>, error: bool, stale: bool, light: bool) -
             [111, 125, 143, 215]
         } else {
             [159, 173, 192, 215]
-        };
-    } else if value.is_some_and(|v| v <= 10) {
-        accent = if light {
-            [161, 94, 0, 255]
-        } else {
-            [255, 194, 91, 255]
         };
     }
     let mut track = accent;
@@ -132,4 +126,37 @@ fn bitmap_mask(text: &str) -> Vec<u8> {
         }
     }
     mask
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn has_blue_arc(image: &Image<'_>, blue: [u8; 4]) -> bool {
+        image
+            .rgba()
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .enumerate()
+            .any(|(i, pixel)| {
+                let x = (i % SIZE) as f64 + 0.5 - SIZE as f64 / 2.0;
+                let y = (i / SIZE) as f64 + 0.5 - SIZE as f64 / 2.0;
+                x.hypot(y) >= 26.0 && *pixel == blue
+            })
+    }
+    #[test]
+    fn healthy_remaining_rings_use_the_app_blue_even_at_low_allowances() {
+        for (light, blue) in [(true, [0, 120, 212, 255]), (false, [96, 205, 255, 255])] {
+            for remaining in 1..=100 {
+                assert!(has_blue_arc(
+                    &render(Some(remaining), false, false, light),
+                    blue
+                ));
+            }
+            assert!(!has_blue_arc(&render(Some(0), false, false, light), blue));
+            assert!(!has_blue_arc(&render(None, false, false, light), blue));
+            assert!(!has_blue_arc(&render(Some(36), true, false, light), blue));
+            assert!(!has_blue_arc(&render(Some(36), false, true, light), blue));
+        }
+    }
 }

@@ -35,6 +35,18 @@ pub enum Glyph {
 pub fn cursor_quota(
     report: &opentoken_core::model::Report,
 ) -> Option<&opentoken_core::model::Quota> {
+    if report.source == opentoken_core::model::ReportSource::CursorDashboard {
+        // Match the dashboard summary: prefer the reported aggregate, not the
+        // most exhausted independent Auto/API bucket. Never fabricate a total.
+        return ["cursor_monthly", "cursor_api", "cursor_auto"]
+            .iter()
+            .find_map(|id| {
+                report
+                    .quotas
+                    .iter()
+                    .find(|q| q.id == *id && q.percent.is_some_and(f64::is_finite))
+            });
+    }
     report
         .quotas
         .iter()
@@ -211,7 +223,7 @@ mod tests {
         }
     }
     #[test]
-    fn personal_cursor_badge_uses_the_most_limited_reported_bucket_not_an_average() {
+    fn personal_cursor_badge_uses_reported_monthly_total_and_explicit_bucket_fallbacks() {
         use opentoken_core::model::{Quota, Report, ReportSource};
         let mut report = Report {
             plan: Some("Pro".into()),
@@ -220,13 +232,34 @@ mod tests {
             observed_at: chrono::Utc::now(),
             quotas: vec![
                 Quota::window("cursor_monthly", "Monthly plan", 25.0, None),
-                Quota::window("cursor_auto", "Auto", 10.0, None),
+                Quota::window("cursor_auto", "Auto", 100.0, None),
                 Quota::window("cursor_api", "API", 42.0, None),
             ],
         };
         let q = cursor_quota(&report).unwrap();
-        assert_eq!(q.id, "cursor_api");
-        assert_eq!(remaining(q.percent.unwrap()), 58);
+        assert_eq!(q.id, "cursor_monthly");
+        assert_eq!(remaining(q.percent.unwrap()), 75);
+        report.quotas[0].percent = Some(64.27777777777777);
+        assert_eq!(
+            remaining(cursor_quota(&report).unwrap().percent.unwrap()),
+            36
+        );
+        report.quotas[0].percent = Some(100.0);
+        assert_eq!(
+            remaining(cursor_quota(&report).unwrap().percent.unwrap()),
+            0
+        );
+        report.quotas[0].percent = Some(f64::NAN);
+        assert_eq!(cursor_quota(&report).unwrap().id, "cursor_api");
+        assert_eq!(
+            remaining(cursor_quota(&report).unwrap().percent.unwrap()),
+            58
+        );
+        report.quotas.retain(|q| q.id == "cursor_auto");
+        assert_eq!(
+            remaining(cursor_quota(&report).unwrap().percent.unwrap()),
+            0
+        );
         report.quotas.clear();
         assert!(cursor_quota(&report).is_none());
     }

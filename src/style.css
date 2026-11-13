@@ -5,6 +5,8 @@
   -webkit-font-smoothing: antialiased;
   color-scheme: light;
   --surface: rgb(245 245 247 / .88);
+  --glass-tint: rgb(243 243 243 / .80);
+  --scrollbar-thumb: rgb(0 0 0 / .36);
   --group: rgb(255 255 255 / .38);
   --field: rgb(255 255 255 / .65);
   --text: #1b1b1b;
@@ -13,12 +15,15 @@
   --border: rgb(0 0 0 / .065);
   --provider-selected: #dedede;
   --blue: #0078d4;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
   color: var(--text);
   background: #e7eef5;
 }
 :root[data-theme='dark'] {
   color-scheme: dark;
   --surface: rgb(29 29 32 / .86);
+  --glass-tint: rgb(32 32 32 / .84);
+  --scrollbar-thumb: rgb(255 255 255 / .38);
   --group: rgb(255 255 255 / .045);
   --field: rgb(255 255 255 / .06);
   --text: #f4f4f4;
@@ -29,8 +34,11 @@
   --blue: #60cdff;
   background: #242a31;
 }
-/* DWM renders the actual desktop acrylic behind the transparent WebView. */
-:root[data-desktop='true'] { background: transparent; }
+/* Native DWM supplies the desktop blur; one taskbar-weight tint supplies contrast.
+   Do not stack extra washes on the header, scrolling body, footer or save bar. */
+:root[data-desktop='true'],
+:root[data-desktop='true'] :where(body, #root, .app, .save-bar) { background: transparent; }
+:root[data-desktop='true'] .surface { background: var(--glass-tint); }
 * { box-sizing: border-box; }
 body { margin: 0; }
 button, input, select { font: inherit; }
@@ -60,7 +68,7 @@ main { flex: 1; min-height: 0; overflow-y: auto; padding: 10px 22px 18px; scroll
 .provider-tab .provider-mark-devin { mask-size: 110% 110%; -webkit-mask-size: 110% 110%; }
 .provider-tab-label { display: block; max-width: 100%; font-size: 12px; line-height: 1.4; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .provider-usage-stripe { position: absolute; bottom: 3px; height: 3px; width: 62%; border-radius: 2px; background: var(--track); overflow: hidden; }
-.provider-usage-stripe > i { display: block; height: 100%; border-radius: inherit; }
+.provider-usage-stripe > i { display: block; height: 100%; border-radius: inherit; background: var(--blue); }
 .add-provider-mark { display: flex; align-items: center; justify-content: center; flex-shrink: 0; width: 31px; height: 31px; }
 .provider-summary { padding: 0 0 13px; border-bottom: 1px solid var(--border); margin-bottom: 14px; }
 .provider-heading-link { display: flex; justify-content: space-between; width: 100%; padding: 0; text-align: left; }
@@ -267,8 +275,18 @@ select { cursor: pointer; }
 .folder-problem small { font-size: 11px; display: block; overflow-wrap: anywhere; margin-top: 6px; }
 .spin { animation: spin 1.1s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
-::-webkit-scrollbar { width: 4px; }
-::-webkit-scrollbar-thumb { background: #c7c7c5; border-radius: 5px; }
+/* Chromium's standard thin scrollbars override the WebKit thumb rules. Set both
+   paths explicitly so the track never paints an opaque system-colored strip. */
+::-webkit-scrollbar { width: 4px; height: 4px; background: transparent; }
+::-webkit-scrollbar-track, ::-webkit-scrollbar-track-piece, ::-webkit-scrollbar-corner { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb); border-radius: 5px; }
+::-webkit-scrollbar-button { display: none; }
+/* Respect Windows high contrast rather than forcing glass through its solid fallback. */
+@media (forced-colors: active) {
+  :root { scrollbar-color: auto; }
+  :root[data-desktop='true'],
+  :root[data-desktop='true'] :is(.surface, .save-bar) { background: Canvas; }
+}
 @media (max-width: 410px) {
   main { padding-left: 15px; padding-right: 15px; }
   .spend-surface { padding-left: 12px; padding-right: 12px; }

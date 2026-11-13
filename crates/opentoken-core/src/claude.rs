@@ -18,18 +18,45 @@ pub struct ClaudeAdapter {
     pub user_home: PathBuf,
 }
 impl ClaudeAdapter {
-    pub fn accounts(&self, s: &Settings) -> Vec<Account> {
+    /// Configured homes, then (with auto-discovery) the default home and every
+    /// sibling Claude profile folder that actually holds a Claude sign-in, e.g.
+    /// `~/.claude-work` or `~/.config/claude-2` created with `CLAUDE_CONFIG_DIR`.
+    pub fn candidate_homes(&self, s: &Settings) -> Vec<PathBuf> {
         let mut homes: Vec<_> = s
             .claude_homes
             .iter()
             .map(|p| normalize(p, &self.user_home))
             .collect();
-        if homes.is_empty() {
-            if let Some(p) = std::env::var_os("CLAUDE_CONFIG_DIR") {
-                homes.push(PathBuf::from(p));
-            }
-            homes.push(self.user_home.join(".claude"));
+        // Implicit defaults count only when signed in, so enabling Claude by default
+        // never shows a "not signed in" card to people who do not use Claude.
+        // Explicitly configured homes always show, signed in or not.
+        if homes.is_empty() || s.auto_discover {
+            let defaults = std::env::var_os("CLAUDE_CONFIG_DIR")
+                .map(PathBuf::from)
+                .into_iter()
+                .chain([self.user_home.join(".claude")]);
+            homes.extend(defaults.filter(|home| has_sign_in(home)));
         }
+        if s.auto_discover {
+            let mut found: Vec<_> = [self.user_home.clone(), self.user_home.join(".config")]
+                .iter()
+                .flat_map(|parent| crate::codex::directories(parent))
+                .filter(|dir| {
+                    let name = dir
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .to_lowercase();
+                    name.trim_start_matches('.').starts_with("claude") && has_sign_in(dir)
+                })
+                .collect();
+            found.sort();
+            homes.extend(found);
+        }
+        homes
+    }
+    pub fn accounts(&self, s: &Settings) -> Vec<Account> {
+        let homes = self.candidate_homes(s);
         let ignored: std::collections::HashSet<_> = s
             .ignored_homes
             .iter()
@@ -55,10 +82,12 @@ impl ClaudeAdapter {
                         {
                             format!("Claude · account {}", &hash(&path_key(&home))[..6])
                         } else {
-                            format!(
-                                "Claude · {}",
-                                home.file_name().unwrap_or_default().to_string_lossy()
-                            )
+                            let name = home.file_name().unwrap_or_default().to_string_lossy();
+                            let short = name
+                                .trim_start_matches('.')
+                                .trim_start_matches("claude")
+                                .trim_start_matches(['-', '_', '.']);
+                            format!("Claude · {}", if short.is_empty() { &name } else { short })
                         }
                     }),
                     id,
@@ -75,23 +104,32 @@ impl ClaudeAdapter {
     }
     pub fn monitored_accounts(&self, s: &Settings) -> Vec<Account> {
         let mut accounts = self.accounts(s);
-        for account in &mut accounts {
-            if let Some(path) = account
+        // Two folders holding the same login (a copied profile) are one account.
+        let mut logins = std::collections::HashSet::new();
+        accounts.retain_mut(|account| {
+            let Some(value) = account
                 .sources
                 .first()
                 .map(|s| s.path.join(".credentials.json"))
                 .filter(|p| crate::monitoring::safe_file(p))
-            {
-                if let Ok(value) = load(&path) {
-                    if let Some(token) = value["claudeAiOauth"]["accessToken"]
-                        .as_str()
-                        .filter(|t| !t.trim().is_empty())
-                    {
-                        Self::bind_scope(account, &hash(token.trim()));
-                    }
+                .and_then(|p| load(&p).ok())
+            else {
+                return true;
+            };
+            let oauth = &value["claudeAiOauth"];
+            if let Some(refresh) = parser::text(&oauth["refreshToken"]) {
+                if !logins.insert(hash(refresh.trim())) {
+                    return false;
                 }
             }
-        }
+            if let Some(token) = oauth["accessToken"]
+                .as_str()
+                .filter(|t| !t.trim().is_empty())
+            {
+                Self::bind_scope(account, &hash(token.trim()));
+            }
+            true
+        });
         accounts
     }
     pub(crate) fn bind_scope(account: &mut Account, marker: &str) {
@@ -132,7 +170,9 @@ impl ClaudeAdapter {
                 ));
             }
         }
-        let exp = parser::number(&oauth["expiresAt"]);
+        // Claude Code writes `expiresAt: 0` for credentials without a known expiry
+        // (e.g. long-lived tokens). That is "unknown", not "expired in 1970".
+        let exp = parser::number(&oauth["expiresAt"]).filter(|e| *e > 0.0);
         let mut token = parser::text(&oauth["accessToken"]).unwrap_or_default();
         // Proactive five-minute renewal is only for separately approved monitoring.
         // Existing-source reads let the provider decide bearer acceptance; cached expiry is only a renewal hint.
@@ -232,6 +272,14 @@ impl ClaudeAdapter {
             )
         })?;
         let response=self.http.post("https://platform.claude.com/v1/oauth/token").json(&json!({"grant_type":"refresh_token","refresh_token":refresh,"client_id":"9d1c250a-e61b-44d9-88ed-5944d1962f5e","scope":"user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload"})).send().await.map_err(|_|Fault::offline())?;
+        // OAuth answers a dead/revoked refresh token with 400 invalid_grant. That is
+        // an expired sign-in, not a network problem.
+        if response.status() == reqwest::StatusCode::BAD_REQUEST {
+            return Err(Fault::new(
+                FaultKind::NeedsRelogin,
+                "Claude session expired. Run claude in this profile to sign in again.",
+            ));
+        }
         check_response(&response)?;
         let updated = bounded_json(response).await?;
         let access = parser::text(&updated["access_token"]).ok_or_else(|| {
@@ -263,6 +311,10 @@ impl ClaudeAdapter {
 fn renewal_needed(token: &str, expires: Option<f64>, allowed: bool, now: i64) -> bool {
     token.trim().is_empty()
         || (allowed && expires.is_some_and(|e| e <= now.saturating_add(300000) as f64))
+}
+/// A folder is a Claude profile only if it holds a Claude OAuth sign-in.
+fn has_sign_in(home: &Path) -> bool {
+    load(&home.join(".credentials.json")).is_ok()
 }
 fn load(path: &Path) -> Result<Value, Fault> {
     if !path.exists() {
@@ -341,10 +393,61 @@ mod tests {
         };
         let s = Settings {
             claude_homes: vec!["/a".into(), "/b".into()],
+            auto_discover: false,
             ..Default::default()
         };
         let accounts = a.accounts(&s);
         assert_eq!(accounts.len(), 2);
         assert_ne!(accounts[0].id, accounts[1].id);
+    }
+    fn sign_in(dir: &Path, refresh: &str) {
+        std::fs::create_dir_all(dir).unwrap();
+        std::fs::write(
+            dir.join(".credentials.json"),
+            json!({"claudeAiOauth":{"accessToken":format!("a-{refresh}"),"refreshToken":refresh}})
+                .to_string(),
+        )
+        .unwrap();
+    }
+    #[test]
+    fn discovers_signed_in_profile_folders_and_skips_empty_and_duplicate_ones() {
+        let t = tempfile::tempdir().unwrap();
+        let home = t.path();
+        sign_in(&home.join(".claude"), "main");
+        sign_in(&home.join(".claude-2"), "second");
+        sign_in(&home.join(".config/claude-work"), "work");
+        sign_in(&home.join(".claude-copy"), "main");
+        std::fs::create_dir_all(home.join(".claude-empty")).unwrap();
+        std::fs::create_dir_all(home.join(".codex")).unwrap();
+        let a = ClaudeAdapter {
+            http: reqwest::Client::new(),
+            user_home: home.to_path_buf(),
+        };
+        let s = Settings {
+            auto_discover: true,
+            ..Default::default()
+        };
+        let mut labels: Vec<_> = a
+            .monitored_accounts(&s)
+            .into_iter()
+            .map(|a| a.label)
+            .collect();
+        labels.sort();
+        assert_eq!(labels, ["Claude", "Claude · 2", "Claude · work"]);
+        let off = Settings {
+            auto_discover: false,
+            ..Default::default()
+        };
+        assert_eq!(a.accounts(&off).len(), 1);
+        std::fs::remove_file(home.join(".claude/.credentials.json")).unwrap();
+        assert!(
+            a.accounts(&off).is_empty(),
+            "an unsigned default home is not an account"
+        );
+    }
+    #[test]
+    fn zero_expiry_is_unknown_not_expired() {
+        let exp = parser::number(&json!(0)).filter(|e| *e > 0.0);
+        assert!(!renewal_needed("fixture-only", exp, true, 1_000_000));
     }
 }

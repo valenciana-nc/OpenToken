@@ -153,7 +153,10 @@ fn stale_preferences_cannot_restore_disconnected_default_accounts() {
 fn enabling_a_new_provider_does_not_add_an_unmonitored_default_profile() {
     let (_temp, storage) = fixture();
     fs::create_dir_all(storage.user_home.join(".claude")).unwrap();
-    let before = Settings::default();
+    let before = Settings {
+        claude_enabled: false,
+        ..Default::default()
+    };
     let profile = Profile::prepare(&storage, CliProvider::Claude, &before).unwrap();
     let next = profile
         .commit(&storage, &before, &account(&profile))

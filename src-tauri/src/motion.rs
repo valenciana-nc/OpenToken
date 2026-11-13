@@ -199,6 +199,7 @@ pub fn reposition(app: &tauri::AppHandle, rest: (i32, i32), offset: (i32, i32)) 
     let _ = app.run_on_main_thread(move || reposition_on_main(&handle, rest, offset));
 }
 fn reposition_on_main(app: &tauri::AppHandle, rest: (i32, i32), offset: (i32, i32)) {
+    let _activity = crate::runtime_health::activity(crate::runtime_health::Stage::Motion);
     let (Some(window), Some(state)) = (
         app.get_webview_window("main"),
         app.try_state::<std::sync::Arc<AppState>>(),
@@ -225,6 +226,7 @@ fn request(app: &tauri::AppHandle, opening: bool, destination: Option<((i32, i32
     let _ = app.run_on_main_thread(move || begin(&handle, opening, destination));
 }
 fn begin(app: &tauri::AppHandle, opening: bool, destination: Option<((i32, i32), (i32, i32))>) {
+    let _activity = crate::runtime_health::activity(crate::runtime_health::Stage::Motion);
     let (Some(window), Some(state)) = (
         app.get_webview_window("main"),
         app.try_state::<std::sync::Arc<AppState>>(),
@@ -246,7 +248,9 @@ fn begin(app: &tauri::AppHandle, opening: bool, destination: Option<((i32, i32),
         )
     {
         if opening && previous_phase == Phase::Open {
-            let _ = window.set_position(PhysicalPosition::new(inner.rest.0, inner.rest.1));
+            let rest = inner.rest;
+            drop(inner);
+            let _ = window.set_position(PhysicalPosition::new(rest.0, rest.1));
             let _ = window.set_focus();
             focus_content(&window);
         }
@@ -370,10 +374,6 @@ fn begin(app: &tauri::AppHandle, opening: bool, destination: Option<((i32, i32),
     inner.status.alpha = from.alpha;
     inner.status.slide = from.slide;
     inner.last_frame = Some(from);
-    if opening {
-        let _ = window.show();
-        let _ = window.set_focus();
-    }
     let plan = Plan {
         epoch,
         opening,
@@ -385,6 +385,9 @@ fn begin(app: &tauri::AppHandle, opening: bool, destination: Option<((i32, i32),
     };
     drop(inner);
     if opening {
+        // Show/focus dispatch native callbacks. Publish state and release its mutex first.
+        let _ = window.show();
+        let _ = window.set_focus();
         crate::visibility(app, true);
         if state.flyout.modal_count() == 0 {
             focus_content(&window);
@@ -455,6 +458,7 @@ fn pump_animation(app: &tauri::AppHandle, plan: Plan) {
     });
 }
 fn frame(app: &tauri::AppHandle, plan: Plan, progress: f64, compositor_paced: bool) -> bool {
+    let _activity = crate::runtime_health::activity(crate::runtime_health::Stage::Motion);
     let (Some(window), Some(state)) = (
         app.get_webview_window("main"),
         app.try_state::<std::sync::Arc<AppState>>(),
@@ -496,6 +500,7 @@ fn frame(app: &tauri::AppHandle, plan: Plan, progress: f64, compositor_paced: bo
     true
 }
 fn finish(app: &tauri::AppHandle, plan: Plan) -> bool {
+    let _activity = crate::runtime_health::activity(crate::runtime_health::Stage::Motion);
     let (Some(window), Some(state)) = (
         app.get_webview_window("main"),
         app.try_state::<std::sync::Arc<AppState>>(),

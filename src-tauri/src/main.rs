@@ -12,6 +12,7 @@ mod login_process;
 mod motion;
 mod placement;
 mod platform;
+mod runtime_health;
 mod tray_health;
 use opentoken_core::{
     engine::Engine,
@@ -34,6 +35,7 @@ struct Slot {
     icon: TrayIcon,
     key: (icon::Glyph, bool),
     health: tray_health::Health,
+    tooltip: String,
 }
 struct AppState {
     engine: Engine,
@@ -204,10 +206,12 @@ async fn save_settings(
     let handle = app.clone();
     let (tx, rx) = tokio::sync::oneshot::channel();
     app.run_on_main_thread(move || {
+        let _activity = runtime_health::activity(runtime_health::Stage::Preferences);
         let snapshot = shared.engine.state.borrow().clone();
         update_trays(&handle, &snapshot, &shared);
         if let Some(window) = handle.get_webview_window("main") {
-            platform::apply_window_style(&window, &shared.engine.settings.borrow().theme);
+            let theme = shared.engine.settings.borrow().theme.clone();
+            platform::apply_window_style(&window, &theme);
             if shared.motion.requested_visible() && window.is_visible().unwrap_or(false) {
                 present(&handle, None, false);
             }
@@ -721,15 +725,21 @@ fn get_desktop_status(
     app: tauri::AppHandle,
     state: tauri::State<'_, Arc<AppState>>,
 ) -> serde_json::Value {
+    // Native getters/COM can dispatch nested Windows messages. Never hold the tray
+    // mutex while calling them: a nested reconciliation needs that same mutex.
+    let trays = {
+        let slots = state.trays.lock().unwrap();
+        serde_json::json!({
+            "accountTrayIcons":slots.keys().filter(|id|id.as_str()!="opentoken" && !id.ends_with(":provider")).count(),
+            "providerTrayIcons":slots.keys().filter(|id|id.ends_with(":provider")).count(),
+            "nativeTrayIcons":slots.len(),
+            "unconfirmedTrayIcons":slots.values().filter(|s|s.health.unconfirmed).count(),
+            "trayRepairs":slots.values().map(|s|s.health.repairs).sum::<u64>(),
+            "trayRemaining":slots.iter().filter_map(|(id,slot)| match slot.key.0 { icon::Glyph::Badge{primary,..} | icon::Glyph::Usage{primary,..} => Some((id.clone(),primary)), _=>None }).collect::<HashMap<_,_>>(),
+        })
+    };
     let window = app.get_webview_window("main");
-    let slots = state.trays.lock().unwrap();
-    serde_json::json!({
-        "accountTrayIcons":slots.keys().filter(|id|id.as_str()!="opentoken" && !id.ends_with(":provider")).count(),
-        "providerTrayIcons":slots.keys().filter(|id|id.ends_with(":provider")).count(),
-        "nativeTrayIcons":slots.len(),
-        "unconfirmedTrayIcons":slots.values().filter(|s|s.health.unconfirmed).count(),
-        "trayRepairs":slots.values().map(|s|s.health.repairs).sum::<u64>(),
-        "trayRemaining":slots.iter().filter_map(|(id,slot)| match slot.key.0 { icon::Glyph::Badge{primary,..} | icon::Glyph::Usage{primary,..} => Some((id.clone(),primary)), _=>None }).collect::<HashMap<_,_>>(),
+    let mut result = serde_json::json!({
         "material":window.as_ref().map(platform::material_status),
         "visible":window.as_ref().and_then(|w|w.is_visible().ok()),
         "dashboardPinned":state.engine.settings.borrow().dashboard_pinned,
@@ -743,7 +753,12 @@ fn get_desktop_status(
         "position":window.as_ref().and_then(|w|w.outer_position().ok()),
         "size":window.as_ref().and_then(|w|w.outer_size().ok()),
         "workArea":window.and_then(|w|w.primary_monitor().ok().flatten()).map(|m|*m.work_area()),
-    })
+    });
+    result
+        .as_object_mut()
+        .unwrap()
+        .extend(trays.as_object().unwrap().clone());
+    result
 }
 #[tauri::command]
 fn quit(app: tauri::AppHandle) {
@@ -813,7 +828,47 @@ fn present(app: &tauri::AppHandle, anchor: Option<tauri::PhysicalPosition<f64>>,
         }
     }
 }
+// Await the UI acknowledgement before taking another watch value. Slow shell calls
+// cannot build an unbounded queue of obsolete snapshots, and the callback reads latest state.
+async fn reconcile_trays(app: &tauri::AppHandle, state: &Arc<AppState>) -> bool {
+    let handle = app.clone();
+    let shared = state.clone();
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    if app
+        .run_on_main_thread(move || {
+            let snapshot = shared.engine.state.borrow().clone();
+            update_trays(&handle, &snapshot, &shared);
+            let _ = tx.send(());
+        })
+        .is_err()
+    {
+        return false;
+    }
+    rx.await.is_ok()
+}
+/// Where a tray reading came from, as shown in its tooltip.
+fn provenance(source: opentoken_core::model::ReportSource) -> &'static str {
+    use opentoken_core::model::ReportSource as S;
+    match source {
+        S::Provider => "Verified · ",
+        S::CliLog => "CLI log · ",
+        S::CursorDashboard => "Cursor app · Unofficial dashboard · ",
+        S::CopilotInternal => "GitHub CLI · Unofficial quota · ",
+        S::GrokCli | S::GrokCliRenewal => "Grok CLI · Private credit API · ",
+        S::DevinCli => "Devin CLI · Unofficial quota · ",
+        S::DevinApp => "Devin app · Unofficial quota · ",
+        S::AntigravityCliUsage => {
+            "Official agy /usage · Current profile · Identity not provided · "
+        }
+        S::AntigravityCli => "Antigravity CLI · Daily Cloud Code quota · ",
+        S::AntigravityStored => "Antigravity IDE · Stored session · Daily quota · ",
+        S::AntigravityLocal => "Antigravity app · Owned local quota · ",
+        S::MuseCli => "Muse CLI · Last observation · ",
+        S::MuseDevice => "Muse · Authorized key-issuing quota endpoint · ",
+    }
+}
 fn update_trays(app: &tauri::AppHandle, snapshot: &Snapshot, state: &AppState) {
+    let _activity = runtime_health::activity(runtime_health::Stage::Trays);
     let settings = state.engine.settings.borrow().clone();
     let mut desired: Vec<_> = snapshot
         .accounts
@@ -865,78 +920,22 @@ fn update_trays(app: &tauri::AppHandle, snapshot: &Snapshot, state: &AppState) {
                 })
                 .unwrap_or_default();
             let provider = s.account.provider.name();
-            let provenance =
-                if s.report.is_none() {
-                    "Unavailable · "
-                } else if stale {
-                    "Cached · "
-                } else if s
-                    .report
-                    .as_ref()
-                    .is_some_and(|r| r.source == opentoken_core::model::ReportSource::CliLog)
-                {
-                    "CLI log · "
-                } else if s.report.as_ref().is_some_and(|r| {
+            let provenance = match &s.report {
+                None => "Unavailable · ",
+                Some(_) if stale => "Cached · ",
+                Some(r) => provenance(r.source),
+            };
+            let primary_label = if s.account.provider == opentoken_core::model::Provider::Cursor
+                && s.report.as_ref().is_some_and(|r| {
                     r.source == opentoken_core::model::ReportSource::CursorDashboard
                 }) {
-                    "Cursor app · Unofficial dashboard · "
-                } else if s.report.as_ref().is_some_and(|r| {
-                    r.source == opentoken_core::model::ReportSource::CopilotInternal
-                }) {
-                    "GitHub CLI · Unofficial quota · "
-                } else if s.report.as_ref().is_some_and(|r| {
-                    matches!(
-                        r.source,
-                        opentoken_core::model::ReportSource::GrokCli
-                            | opentoken_core::model::ReportSource::GrokCliRenewal
-                    )
-                }) {
-                    "Grok CLI · Private credit API · "
-                } else if s
-                    .report
-                    .as_ref()
-                    .is_some_and(|r| r.source == opentoken_core::model::ReportSource::DevinCli)
-                {
-                    "Devin CLI · Unofficial quota · "
-                } else if s
-                    .report
-                    .as_ref()
-                    .is_some_and(|r| r.source == opentoken_core::model::ReportSource::DevinApp)
-                {
-                    "Devin app · Unofficial quota · "
-                } else if s.report.as_ref().is_some_and(|r| {
-                    r.source == opentoken_core::model::ReportSource::AntigravityCliUsage
-                }) {
-                    "Official agy /usage · Current profile · Identity not provided · "
-                } else if s.report.as_ref().is_some_and(|r| {
-                    r.source == opentoken_core::model::ReportSource::AntigravityCli
-                }) {
-                    "Antigravity CLI · Daily Cloud Code quota · "
-                } else if s.report.as_ref().is_some_and(|r| {
-                    r.source == opentoken_core::model::ReportSource::AntigravityStored
-                }) {
-                    "Antigravity IDE · Stored session · Daily quota · "
-                } else if s.report.as_ref().is_some_and(|r| {
-                    r.source == opentoken_core::model::ReportSource::AntigravityLocal
-                }) {
-                    "Antigravity app · Owned local quota · "
-                } else if s
-                    .report
-                    .as_ref()
-                    .is_some_and(|r| r.source == opentoken_core::model::ReportSource::MuseCli)
-                {
-                    "Muse CLI · Last observation · "
-                } else if s
-                    .report
-                    .as_ref()
-                    .is_some_and(|r| r.source == opentoken_core::model::ReportSource::MuseDevice)
-                {
-                    "Muse · Authorized key-issuing quota endpoint · "
-                } else {
-                    "Verified · "
-                };
+                q.and_then(|q| percent.map(|left| format!("{}: {}% left · ", q.label, left)))
+                    .unwrap_or_default()
+            } else {
+                String::new()
+            };
             let tooltip = format!(
-                "OpenToken · {provider} · {provenance}{}{}{}{}",
+                "OpenToken · {provider} · {primary_label}{provenance}{}{}{}{}",
                 s.account.email.as_deref().unwrap_or(&s.account.label),
                 if windows.is_empty() {
                     " · Percent-left not reported".to_string()
@@ -987,7 +986,9 @@ fn update_trays(app: &tauri::AppHandle, snapshot: &Snapshot, state: &AppState) {
             "OpenToken · Click to connect your accounts".into(),
         ));
     }
-    let Ok(mut slots) = state.trays.lock() else {
+    // A synchronous Explorer/COM call can pump messages and reenter this function.
+    // The outer pass already owns reconciliation; never wait on ourselves.
+    let Ok(mut slots) = state.trays.try_lock() else {
         return;
     };
     let removed: Vec<_> = slots
@@ -1009,6 +1010,12 @@ fn update_trays(app: &tauri::AppHandle, snapshot: &Snapshot, state: &AppState) {
         if let Some(slot) = slots.get_mut(&id) {
             // NIM_MODIFY fails when Explorer has lost the registration. An owned
             // cached TrayIcon alone does NOT establish presence in the shell.
+            if !slot.health.should_probe(
+                std::time::Instant::now(),
+                slot.tooltip != tooltip || slot.key != key,
+            ) {
+                continue;
+            }
             let mut confirmed = slot.icon.set_tooltip(Some(&tooltip)).is_ok();
             if !confirmed && slot.health.failed(std::time::Instant::now()) {
                 if tray_health::restore(&slot.icon) && slot.icon.set_tooltip(Some(&tooltip)).is_ok()
@@ -1022,6 +1029,9 @@ fn update_trays(app: &tauri::AppHandle, snapshot: &Snapshot, state: &AppState) {
             } else if confirmed {
                 slot.health.confirmed(false);
             }
+            if confirmed {
+                slot.tooltip.clone_from(&tooltip);
+            }
             if confirmed
                 && slot.key != key
                 && slot
@@ -1033,7 +1043,7 @@ fn update_trays(app: &tauri::AppHandle, snapshot: &Snapshot, state: &AppState) {
             }
             continue;
         }
-        let built = (|| -> tauri::Result<TrayIcon> {
+        let build = |guid: Option<u128>| -> tauri::Result<TrayIcon> {
             let menu = Menu::with_items(
                 app,
                 &[
@@ -1044,7 +1054,12 @@ fn update_trays(app: &tauri::AppHandle, snapshot: &Snapshot, state: &AppState) {
                     &MenuItem::with_id(app, "quit", "Exit OpenToken", true, None::<&str>)?,
                 ],
             )?;
-            TrayIconBuilder::with_id(&id)
+            let builder = TrayIconBuilder::with_id(&id);
+            let builder = match guid {
+                Some(guid) => builder.guid(guid),
+                None => builder,
+            };
+            builder
                 .icon(icon::render(glyph, light_taskbar))
                 .tooltip(&tooltip)
                 .menu(&menu)
@@ -1097,25 +1112,51 @@ fn update_trays(app: &tauri::AppHandle, snapshot: &Snapshot, state: &AppState) {
                     }
                 })
                 .build(app)
-        })();
+        };
+        let guid = std::env::current_exe()
+            .ok()
+            .map(|exe| tray_health::guid(&exe, &id));
+        let built = build(guid).and_then(|icon| {
+            // While Explorer is still starting, every registration fails; that is the
+            // TaskbarCreated retry path's job, not evidence the GUID was refused.
+            if guid.is_none()
+                || icon.set_tooltip(Some(&tooltip)).is_ok()
+                || !tray_health::shell_ready()
+            {
+                return Ok(icon);
+            }
+            // Explorer refuses a GUID it has bound to another binary path. A stable
+            // identity is worth nothing if the icon is missing, so fall back to the
+            // per-run identity rather than leaving the account without a tray icon.
+            tracing::warn!("Windows refused a stable tray identity; using a per-run one");
+            drop(icon);
+            let _ = app.remove_tray_by_id(&id);
+            build(None)
+        });
         match built {
             Ok(icon) => {
                 let confirmed = icon.set_tooltip(Some(&tooltip)).is_ok();
                 let mut health = tray_health::Health::default();
                 health.unconfirmed = !confirmed;
-                slots.insert(id, Slot { icon, key, health });
+                health.should_probe(std::time::Instant::now(), true);
+                slots.insert(
+                    id,
+                    Slot {
+                        icon,
+                        key,
+                        health,
+                        tooltip,
+                    },
+                );
             }
             Err(_) => tracing::warn!("Windows could not register a usage tray icon"),
         }
     }
 }
 fn main() {
-    std::panic::set_hook(Box::new(|_| {
-        eprintln!("OpenToken encountered a fatal error. Windows can restart a scheduled instance.");
-        std::process::exit(1);
-    }));
+    logging::install_panic_hook();
     if let Err(e) = run() {
-        eprintln!("OpenToken could not start: {e}");
+        logging::record_failure(&format!("OpenToken could not start: {e}"));
         std::process::exit(1);
     }
 }
@@ -1226,6 +1267,7 @@ fn run() -> anyhow::Result<()> {
         return Ok(());
     }
     std::fs::create_dir_all(storage.dir.join("logs"))?;
+    logging::set_failure_log(storage.dir.join("logs/failures.log"));
     let log = logging::RotatingLog::new(storage.dir.join("logs/opentoken.log"))?;
     let (writer, _guard) = tracing_appender::non_blocking(log);
     tracing_subscriber::fmt()
@@ -1278,13 +1320,15 @@ fn run() -> anyhow::Result<()> {
         // Start inside Tauri's Tokio runtime; no nested runtime or UI-thread network work.
         let engine=tauri::async_runtime::block_on(async{Engine::start_with_credentials(storage.clone(),settings.clone(),Arc::new(credentials::Vault::new(&storage)))});
         let state=Arc::new(AppState{engine:engine.clone(),storage,trays:Mutex::new(HashMap::new()),no_startup,flyout:Arc::new(flyout::State::default()),motion:motion::State::default(),cursor_login:Arc::new(opentoken_core::cursor_login::Flow::default()),cli_logins:Default::default(),github_login:Default::default(),grok_login:Default::default(),antigravity_login:Default::default()});app.manage(state.clone());
+        tracing::info!(pid=std::process::id(), background, "Desktop starting");
+        let monitor=runtime_health::Monitor::default();monitor.start(app.handle().clone(),state.flyout.clone());app.manage(monitor);
         update_trays(app.handle(),&Snapshot::default(),&state);
         let handle=app.handle().clone();let observer=state.clone();let mut rx=engine.state.clone();
-        tauri::async_runtime::spawn(async move{loop{let snapshot=rx.borrow_and_update().clone();let _=handle.emit("state-changed",&snapshot);let app=handle.clone();let s=observer.clone();let _=handle.run_on_main_thread(move||update_trays(&app,&snapshot,&s));if rx.changed().await.is_err(){break;}}});
+        tauri::async_runtime::spawn(async move{loop{let snapshot=rx.borrow_and_update().clone();let _=handle.emit("state-changed",&snapshot);if !reconcile_trays(&handle,&observer).await || rx.changed().await.is_err(){break;}}});
         let tray_handle=app.handle().clone();let tray_state=state.clone();
         tauri::async_runtime::spawn(async move {
-            let mut tick=tokio::time::interval(std::time::Duration::from_secs(15));tick.tick().await;
-            loop {tick.tick().await;let app=tray_handle.clone();let s=tray_state.clone();if tray_handle.run_on_main_thread(move|| {let snapshot=s.engine.state.borrow().clone();update_trays(&app,&snapshot,&s);}).is_err(){break;}}
+            let mut tick=tokio::time::interval(std::time::Duration::from_secs(15));tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);tick.tick().await;
+            loop {tick.tick().await;if !reconcile_trays(&tray_handle,&tray_state).await{break;}}
         });
         let source_handle=app.handle().clone();let mut source_rx=engine.sources.clone();
         tauri::async_runtime::spawn(async move{loop{let value=source_rx.borrow_and_update().clone();let _=source_handle.emit("sources-changed",&value);if source_rx.changed().await.is_err(){break;}}});
@@ -1312,8 +1356,11 @@ fn run() -> anyhow::Result<()> {
         if !background{show(app.handle(),None);}
         if !no_startup&&settings.launch_at_startup {tauri::async_runtime::spawn_blocking(||{if platform::configure_startup(true).is_err(){tracing::warn!("Windows startup registration failed");}});}
         Ok(())
-    }).build(context)?.run(|app,event|if let tauri::RunEvent::ExitRequested{..}=event{
-        if let Some(state)=app.try_state::<Arc<AppState>>() {state.cursor_login.reset();state.cli_logins.reset();state.github_login.reset();state.grok_login.reset();state.antigravity_login.reset();let engine=state.engine.clone();tauri::async_runtime::block_on(async{engine.shutdown().await;});}
+    }).build(context)?.run(|app,event|if let tauri::RunEvent::ExitRequested{code,..}=event{
+        if let Some(monitor)=app.try_state::<runtime_health::Monitor>(){monitor.stop();}
+        tracing::info!(?code,"Desktop exit requested");
+        if let Some(state)=app.try_state::<Arc<AppState>>() {state.cursor_login.reset();state.cli_logins.reset();state.github_login.reset();state.grok_login.reset();state.antigravity_login.reset();let engine=state.engine.clone();tauri::async_runtime::block_on(async{if tokio::time::timeout(std::time::Duration::from_secs(10),engine.shutdown()).await.is_err(){logging::record_failure("Intentional exit: engine shutdown exceeded 10 seconds; allowing exit without a recovery restart");}});}
     });
+    tracing::info!("Desktop stopped");
     Ok(())
 }

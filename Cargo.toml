@@ -15,6 +15,14 @@ chrono = { version = "0.4", features = ["serde"] }
 anyhow = "1"
 tracing = "0.1"
 
+# Stable Windows tray identities (so "always show in taskbar" sticks):
+# - tauri 2.12.4: adds `TrayIconBuilder::guid` (vendor/tauri/src/tray/mod.rs)
+# - tray-icon 0.25.1: `set_tooltip` now addresses GUID-registered icons
+#   (vendor/tray-icon/src/platform_impl/windows/mod.rs)
+[patch.crates-io]
+tauri = { path = "vendor/tauri" }
+tray-icon = { path = "vendor/tray-icon" }
+
 [profile.release]
 codegen-units = 1
 lto = "thin"

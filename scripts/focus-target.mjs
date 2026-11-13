@@ -24,6 +24,7 @@ export async function focusTarget() {
   if (await next() !== 'ready') throw Error(`Native focus helper did not initialize. ${error}`);
   return {
     backdrop: pid => request(`backdrop ${pid}`, 'backdrop'),
+    color: rgb => request(`color ${((rgb & 0xff) << 16 | rgb & 0xff00 | rgb >>> 16).toString(16)}`, 'painted'),
     capture: async (pid, output) => {
       const snapshot = spawn(path.resolve('target/debug/examples/focus-target.exe'), ['--capture', String(pid), output], { stdio: 'pipe' });
       let errors = ''; snapshot.stderr.on('data', b => errors += b.toString());
@@ -32,6 +33,7 @@ export async function focusTarget() {
     },
     focus: () => request('focus', 'focused'),
     hide: () => request('hide', 'hidden'),
+    park: () => request('park', 'parked'),
     allow: pid => request(`allow ${pid}`, 'allowed'),
     main: pid => request(`main ${pid}`, 'main'),
     escape: pid => request(`escape ${pid}`, 'escaped'),

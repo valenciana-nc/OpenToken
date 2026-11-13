@@ -17,7 +17,10 @@ fn main() -> windows::core::Result<()> {
         core::{w, BOOL},
         Win32::{
             Foundation::*,
-            Graphics::Gdi::{GetStockObject, HBRUSH, WHITE_BRUSH},
+            Graphics::Gdi::{
+                CreateSolidBrush, DeleteObject, FillRect, GetStockObject, InvalidateRect,
+                UpdateWindow, HBRUSH, HDC, HGDIOBJ, WHITE_BRUSH,
+            },
             System::LibraryLoader::GetModuleHandleW,
             UI::{Input::KeyboardAndMouse::*, WindowsAndMessaging::*},
         },
@@ -40,12 +43,27 @@ fn main() -> windows::core::Result<()> {
         }
         BOOL(1)
     }
+    static BACKDROP_COLOR: std::sync::atomic::AtomicU32 =
+        std::sync::atomic::AtomicU32::new(0xffffff);
     unsafe extern "system" fn procedure(
         window: HWND,
         message: u32,
         wparam: WPARAM,
         lparam: LPARAM,
     ) -> LRESULT {
+        if message == WM_ERASEBKGND {
+            let mut rect = RECT::default();
+            let brush = CreateSolidBrush(COLORREF(
+                BACKDROP_COLOR.load(std::sync::atomic::Ordering::Relaxed),
+            ));
+            if !brush.0.is_null() {
+                if GetClientRect(window, &mut rect).is_ok() {
+                    FillRect(HDC(wparam.0 as *mut _), &rect, brush);
+                }
+                let _ = DeleteObject(HGDIOBJ(brush.0));
+                return LRESULT(1);
+            }
+        }
         DefWindowProcW(window, message, wparam, lparam)
     }
     unsafe fn belongs_to(mut window: HWND, expected: u32) -> bool {
@@ -99,7 +117,9 @@ fn main() -> windows::core::Result<()> {
         } else {
             (rect.top + rect.bottom) / 2
         };
-        if GetAncestor(WindowFromPoint(POINT { x, y }), GA_ROOT) != window {
+        let hit = GetAncestor(WindowFromPoint(POINT { x, y }), GA_ROOT);
+        if hit != window {
+            eprintln!("Fixture click obscured: target={window:?}, hit={hit:?}, point=({x},{y}), style={:#x}", GetWindowLongPtrW(window, GWL_EXSTYLE));
             return false;
         }
         if SetCursorPos(x, y).is_err() {
@@ -207,7 +227,16 @@ fn main() -> windows::core::Result<()> {
                 }
                 let (message, data) = match command {
                     "focus" => (WM_APP + 1, 0),
+                    "color" => (
+                        WM_APP + 9,
+                        words
+                            .next()
+                            .and_then(|s| usize::from_str_radix(s, 16).ok())
+                            .unwrap_or(0xffffff)
+                            & 0xffffff,
+                    ),
                     "hide" => (WM_APP + 2, 0),
+                    "park" => (WM_APP + 10, 0),
                     "main" => (
                         WM_APP + 3,
                         words
@@ -317,6 +346,21 @@ fn main() -> windows::core::Result<()> {
                         );
                     }
                     emit(if ok { "backdrop" } else { "failed" });
+                }
+                m if m == WM_APP + 10 => {
+                    let mut rect = RECT::default();
+                    let ok = GetWindowRect(window, &mut rect).is_ok()
+                        && SetCursorPos(rect.left + 20, rect.top + 20).is_ok();
+                    emit(if ok { "parked" } else { "failed" });
+                }
+                m if m == WM_APP + 9 => {
+                    BACKDROP_COLOR.store(
+                        message.wParam.0 as u32,
+                        std::sync::atomic::Ordering::Relaxed,
+                    );
+                    let _ = InvalidateRect(Some(window), None, true);
+                    let _ = UpdateWindow(window);
+                    emit("painted");
                 }
                 m if m == WM_APP + 2 => {
                     let _ = ShowWindow(window, SW_HIDE);

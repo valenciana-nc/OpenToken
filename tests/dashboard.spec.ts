@@ -46,12 +46,15 @@ for (const theme of ['light', 'dark'] as const) {
     await expect(codex.locator('.provider-usage-stripe')).toHaveCSS('background-color', theme === 'light' ? 'rgba(0, 0, 0, 0.12)' : 'rgba(255, 255, 255, 0.14)');
     await expect(claude).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
     for (const bar of await page.locator('.track > div').all()) await expect(bar).toHaveCSS('background-color', blue);
+    await expect(page.locator('.provider-usage-stripe > i')).toHaveCount(2);
+    for (const meter of await page.locator('.provider-usage-stripe > i').all()) await expect(meter).toHaveCSS('background-color', blue);
     await codex.screenshot({ path: `artifacts/provider-selected-gray-${theme}.png` });
     await codex.focus(); await page.keyboard.press('ArrowRight');
     await expect(claude).toBeFocused();
     await expect(claude).toHaveAttribute('aria-selected', 'true');
     await expect(claude).toHaveCSS('background-color', gray);
     await expect(codex).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+    for (const meter of await page.locator('.provider-usage-stripe > i').all()) await expect(meter).toHaveCSS('background-color', blue);
     await expect(page.getByRole('progressbar')).toHaveCount(3);
   });
   test(`Add uses the same bare monochrome icon style in ${theme} mode`, async ({ page }) => {
