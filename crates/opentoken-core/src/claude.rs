@@ -70,7 +70,7 @@ impl ClaudeAdapter {
                 let id = format!("claude-{}", hash(&path_key(&home)));
                 Account {
                     label: s.aliases.get(&id).cloned().unwrap_or_else(|| {
-                        if home == self.user_home.join(".claude") {
+                        if path_key(&home) == path_key(&self.user_home.join(".claude")) {
                             "Claude".into()
                         } else if home
                             .parent()

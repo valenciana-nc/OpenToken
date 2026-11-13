@@ -20,7 +20,7 @@ export default function AccountsPage({ snapshot, settings, draft, setDraft, save
     <SourceInventory select={setProvider} busy={busy} action={action} changed={async next=>{await connectionsChanged?.(next);}}/>
     <section className="panel"><h2>Connect existing usage</h2>
       <label>Provider<select value={provider} disabled={busy} onChange={e => setProvider(e.target.value as ProviderId)}>{providers.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select></label>
-      <ProviderConnection key={provider} provider={provider} busy={busy} action={action} changed={async next => { await connectionsChanged?.(next); }}/>
+      <ProviderConnection key={provider} provider={provider} busy={busy} action={action} accounts={snapshot.accounts} changed={async next => { await connectionsChanged?.(next); }}/>
     </section>
     <button className="text-button" disabled={refreshing} onClick={() => void action(() => command('refresh'), 'Source discovery requested. Existing monitoring was refreshed; no login was started.')}><RefreshCw size={15}/>Refresh source discovery</button>
   </div>;

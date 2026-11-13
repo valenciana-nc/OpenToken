@@ -730,7 +730,8 @@ fn get_desktop_status(
     let trays = {
         let slots = state.trays.lock().unwrap();
         serde_json::json!({
-            "accountTrayIcons":slots.keys().filter(|id|id.as_str()!="opentoken" && !id.ends_with(":provider")).count(),
+            "accountTrayIcons":slots.keys().filter(|id|!id.starts_with("opentoken") && !id.ends_with(":provider")).count(),
+            "attentionTrayIcon":slots.contains_key(ATTENTION_TRAY),
             "providerTrayIcons":slots.keys().filter(|id|id.ends_with(":provider")).count(),
             "nativeTrayIcons":slots.len(),
             "unconfirmedTrayIcons":slots.values().filter(|s|s.health.unconfirmed).count(),
@@ -867,12 +868,26 @@ fn provenance(source: opentoken_core::model::ReportSource) -> &'static str {
         S::MuseDevice => "Muse · Authorized key-issuing quota endpoint · ",
     }
 }
+/// Tray slot that summarizes every account without readable usage.
+const ATTENTION_TRAY: &str = "opentoken:attention";
 fn update_trays(app: &tauri::AppHandle, snapshot: &Snapshot, state: &AppState) {
     let _activity = runtime_health::activity(runtime_health::Stage::Trays);
     let settings = state.engine.settings.borrow().clone();
+    // An account with no usage to show gets no icon of its own: one red "!" per
+    // expired sign-in just fills the tray. They share a single attention icon.
+    let mut attention: Vec<(&str, usize)> = Vec::new();
+    for s in snapshot.accounts.iter().filter(|s| s.report.is_none()) {
+        let name = s.account.provider.name();
+        match attention.iter_mut().find(|(n, _)| *n == name) {
+            Some((_, count)) => *count += 1,
+            None => attention.push((name, 1)),
+        }
+    }
+    let attention_total: usize = attention.iter().map(|(_, n)| n).sum();
     let mut desired: Vec<_> = snapshot
         .accounts
         .iter()
+        .filter(|s| s.report.is_some())
         .flat_map(|s| {
             let q = s.report.as_ref().and_then(|r| {
                 if !matches!(
@@ -979,6 +994,28 @@ fn update_trays(app: &tauri::AppHandle, snapshot: &Snapshot, state: &AppState) {
             ]
         })
         .collect();
+    if !attention.is_empty() {
+        desired.push((
+            ATTENTION_TRAY.into(),
+            icon::Glyph::Badge {
+                primary: None,
+                error: true,
+                stale: false,
+            },
+            format!(
+                "OpenToken · {attention_total} need sign-in or setup: {} · Click to review",
+                attention
+                    .iter()
+                    .map(|(name, n)| if *n > 1 {
+                        format!("{name} ×{n}")
+                    } else {
+                        name.to_string()
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        ));
+    }
     if desired.is_empty() {
         desired.push((
             "opentoken".into(),

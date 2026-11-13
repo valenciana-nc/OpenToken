@@ -1,6 +1,7 @@
 import { useId, useState } from 'react';
 import { ChevronLeft, ChevronRight, ExternalLink, Info, Link, LoaderCircle } from 'lucide-react';
-import type { Settings } from '../types';
+import type { AccountState, Settings } from '../types';
+import { signInNeeded } from '../monitoringHealth';
 import type { Action } from '../ui';
 import { command, demo } from '../bridge';
 import { connectionScope, providerDefinition, type ProviderId } from '../providers';
@@ -14,7 +15,7 @@ import MuseSubscription from './MuseSubscription';
 import AntigravityRecovery from './AntigravityRecovery';
 import GrokConnection from './GrokConnection';
 
-type Props={provider:ProviderId;busy:boolean;action:Action;changed:(next:Settings)=>Promise<void>};
+type Props={provider:ProviderId;busy:boolean;action:Action;changed:(next:Settings)=>Promise<void>;accounts?:AccountState[]};
 function AuthenticationOptions({ provider, busy, action, changed,initialMode,back,hideAdvanced=false }: Props&{initialMode?:'enterprise'|'billing';back?:()=>void;hideAdvanced?:boolean}) {
   const [token, setToken] = useState('');
   const [email, setEmail] = useState('');
@@ -76,4 +77,4 @@ function AuthenticationOptions({ provider, busy, action, changed,initialMode,bac
     {provider === 'copilot' && <button className="connection-advanced-toggle" disabled={busy} onClick={() => {setToken('');if(back)back();else setCopilotBilling(false);}}>Back to GitHub sign-in</button>}
   </div>;
 }
-export default function ProviderConnection(props:Props){const[advanced,setAdvanced]=useState<'enterprise'|'billing'|null>(null);if(advanced)return <AuthenticationOptions {...props} key={advanced} initialMode={advanced} back={()=>setAdvanced(null)}/>;if(['devin','antigravity','muse'].includes(props.provider))return <><ExistingConnection {...props}/>{props.provider==='antigravity'&&<AntigravityRecovery {...props}/>}{props.provider==='muse'&&<><ExistingConnection {...props} historyOnly/><MuseSubscription {...props}/></>}</>;if(props.provider==='kimi')return <><ExistingConnection {...props} historyOnly/><AuthenticationOptions {...props}/></>;if(['codex','claude','cursor','copilot','grok','muse'].includes(props.provider))return <><ExistingConnection {...props} recovery={<AuthenticationOptions {...props} hideAdvanced/>}/>{props.provider==='grok'&&<ExistingConnection {...props} historyOnly/>}{props.provider==='cursor'&&<button className="connection-advanced-toggle" disabled={props.busy} onClick={()=>setAdvanced('enterprise')}>Enterprise setup<ChevronRight size={12}/></button>}{props.provider==='copilot'&&<button className="connection-advanced-toggle" disabled={props.busy} onClick={()=>setAdvanced('billing')}>Advanced personal billing<ChevronRight size={12}/></button>}</>;return <AuthenticationOptions {...props}/>;}
+export default function ProviderConnection(props:Props){const[advanced,setAdvanced]=useState<'enterprise'|'billing'|null>(null);const needs=signInNeeded(props.accounts??[],props.provider);if(advanced)return <AuthenticationOptions {...props} key={advanced} initialMode={advanced} back={()=>setAdvanced(null)}/>;if(['devin','antigravity','muse'].includes(props.provider))return <><ExistingConnection {...props} needsSignIn={needs}/>{props.provider==='antigravity'&&<AntigravityRecovery {...props} needsSignIn={needs}/>}{props.provider==='muse'&&<><ExistingConnection {...props} historyOnly/><MuseSubscription {...props}/></>}</>;if(props.provider==='kimi')return <><ExistingConnection {...props} historyOnly/><AuthenticationOptions {...props}/></>;if(['codex','claude','cursor','copilot','grok','muse'].includes(props.provider))return <><ExistingConnection {...props} needsSignIn={needs} recovery={<AuthenticationOptions {...props} hideAdvanced/>}/>{props.provider==='grok'&&<ExistingConnection {...props} historyOnly/>}{props.provider==='cursor'&&<button className="connection-advanced-toggle" disabled={props.busy} onClick={()=>setAdvanced('enterprise')}>Enterprise setup<ChevronRight size={12}/></button>}{props.provider==='copilot'&&<button className="connection-advanced-toggle" disabled={props.busy} onClick={()=>setAdvanced('billing')}>Advanced personal billing<ChevronRight size={12}/></button>}</>;return <AuthenticationOptions {...props}/>;}
