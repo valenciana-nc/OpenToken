@@ -40,17 +40,45 @@ describe('reference provider picker', () => {
     expect(providerRemaining([account(20)], 'claude')).toBeNull();
     expect(providerRemaining([account(20)], 'muse')).toBeNull();
   });
-  it('uses the most limited actually reported Cursor bucket without averaging or inventing totals', () => {
+  it('uses the reported Cursor monthly total instead of an exhausted independent Auto bucket', () => {
     const state = account(25); state.account.provider = 'cursor'; state.report!.source = 'cursor_dashboard';
     state.report!.quotas = [
-      { id: 'cursor_monthly', label: 'Monthly plan', percent: 25, resetsAt: null, value: null, unit: null },
-      { id: 'cursor_api', label: 'API', percent: 42, resetsAt: null, value: null, unit: null },
+      { id: 'cursor_monthly', label: 'Monthly plan', percent: 64.27777777777777, resetsAt: null, value: null, unit: null },
+      { id: 'cursor_auto', label: 'Auto', percent: 100, resetsAt: null, value: null, unit: null },
+      { id: 'cursor_api', label: 'API', percent: 27.266666666666666, resetsAt: null, value: null, unit: null },
     ];
-    expect(providerRemaining([state], 'cursor')).toBe(58);
+    expect(providerRemaining([state], 'cursor')).toBe(36);
     const html = renderToStaticMarkup(<ProviderGrid selected="cursor" select={() => {}} accounts={[state]} add={() => {}}/>);
-    expect(html).toContain('unofficial Cursor dashboard'); expect(html).toContain('reported allowance/budget: 58% left');
+    expect(html).toContain('unofficial Cursor dashboard'); expect(html).toContain('Monthly plan: 36% left');
+    expect(html).toContain('style="width:36%"');
+    state.report!.quotas[0].percent = 100; expect(providerRemaining([state], 'cursor')).toBe(0);
+    state.report!.quotas[0].percent = Number.NaN; expect(providerRemaining([state], 'cursor')).toBe(73);
+    state.report!.quotas = state.report!.quotas.filter(q => q.id === 'cursor_auto');
+    expect(providerRemaining([state], 'cursor')).toBe(0);
     state.report!.quotas = []; expect(providerRemaining([state], 'cursor')).toBeNull();
     state.status = 'stale'; expect(providerRemaining([state], 'cursor')).toBeNull();
+  });
+  it('keeps Enterprise budget selection and distinct-account aggregation separate from personal Cursor buckets', () => {
+    const personal = account(25); personal.account.provider = 'cursor'; personal.report!.source = 'cursor_dashboard';
+    personal.report!.quotas[0].id = 'cursor_monthly';
+    const enterprise = account(42); enterprise.account.provider = 'cursor';
+    enterprise.report!.quotas[0].id = 'cursor_on_demand';
+    expect(providerRemaining([personal], 'cursor')).toBe(75);
+    expect(providerRemaining([enterprise], 'cursor')).toBe(58);
+    expect(providerRemaining([personal, enterprise], 'cursor')).toBe(58);
+    enterprise.status = 'stale'; expect(providerRemaining([personal, enterprise], 'cursor')).toBeNull();
+  });
+  it('uses the shared CSS meter fill for every brand instead of inline provider accents', () => {
+    const accounts = providers.map(provider => {
+      const state = account(35);
+      state.account.provider = provider.id;
+      state.account.id = `fixture-${provider.id}`;
+      return state;
+    });
+    const html = renderToStaticMarkup(<ProviderGrid selected="codex" select={() => {}} accounts={accounts} add={() => {}}/>);
+    expect(html.match(/class="provider-usage-stripe"/g)).toHaveLength(providers.length);
+    expect(html.match(/style="width:65%"/g)).toHaveLength(providers.length);
+    expect(html).not.toContain('background-color:');
   });
   it('does not paint fake provider usage when a reading is missing, nonfinite or stale', () => {
     expect(providerRemaining([], 'codex')).toBeNull();

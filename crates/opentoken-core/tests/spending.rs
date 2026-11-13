@@ -26,6 +26,7 @@ fn setup() -> (tempfile::TempDir, Settings, Vec<(String, PathBuf)>) {
     let mut s = Settings {
         auto_discover: false,
         codex_homes: vec![home.to_string_lossy().into()],
+        claude_enabled: false,
         ..Default::default()
     };
     s.model_prices.insert("fixture-model".into(), price());

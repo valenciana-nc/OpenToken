@@ -609,7 +609,7 @@ fn storage_mode(home: &Path) -> Result<String, Fault> {
     }
     Ok(mode.to_string())
 }
-fn directories(home: &Path) -> Vec<PathBuf> {
+pub(crate) fn directories(home: &Path) -> Vec<PathBuf> {
     std::fs::read_dir(home)
         .into_iter()
         .flatten()

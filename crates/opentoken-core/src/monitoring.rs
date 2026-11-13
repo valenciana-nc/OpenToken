@@ -310,7 +310,11 @@ mod tests {
             user_home: home.clone(),
         };
         let before = std::fs::read(home.join(".claude/.credentials.json")).unwrap();
-        let i = inventory(&storage, &Settings::default(), &Snapshot::default(), 1);
+        let off = Settings {
+            claude_enabled: false,
+            ..Default::default()
+        };
+        let i = inventory(&storage, &off, &Snapshot::default(), 1);
         let c = i
             .sources
             .iter()

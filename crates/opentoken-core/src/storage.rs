@@ -44,7 +44,7 @@ impl Default for Settings {
             history_sources: BTreeMap::new(),
             launch_at_startup: false,
             codex_enabled: true,
-            claude_enabled: false,
+            claude_enabled: true,
             auto_discover: true,
             codex_homes: vec![],
             claude_homes: vec![],
