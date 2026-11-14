@@ -27,8 +27,8 @@ export default function ProviderPanel({ selected, snapshot, settings, now, examp
   const health = monitoringHealth(accounts, settings.connections.some(c => c.provider === selected));
   const latest = accounts.flatMap(a => a.report ? [a.report.observedAt] : []).sort().at(-1) ?? null;
   const tracked = isTrackedProvider(selected);
-  const personalCursor = selected === 'cursor' && accounts.some(a => a.report?.source === 'cursor_dashboard' || settings.connections.some(c => c.id === a.account.id && c.mode === 'cursor_app'));
-  const enterpriseCursor = selected === 'cursor' && accounts.some(a => a.report?.source !== 'cursor_dashboard' && !settings.connections.some(c => c.id === a.account.id && c.mode === 'cursor_app'));
+  const personalCursor = selected === 'cursor' && accounts.some(a => a.report?.source === 'cursor_dashboard' || settings.connections.some(c => c.id === a.account.id && (c.mode === 'cursor_app' || c.mode === 'cursor_session')));
+  const enterpriseCursor = selected === 'cursor' && accounts.some(a => a.report?.source !== 'cursor_dashboard' && !settings.connections.some(c => c.id === a.account.id && (c.mode === 'cursor_app' || c.mode === 'cursor_session')));
   const githubQuota = selected === 'copilot' && accounts.some(a => a.report?.source === 'copilot_internal' || settings.connections.some(c => c.id === a.account.id && c.mode === 'github_cli'));
   const grokQuota = selected==='grok' && accounts.some(a=>['grok_cli','grok_cli_renewal'].includes(a.report?.source??'')||settings.connections.some(c=>c.id===a.account.id&&['grok_cli','grok_cli_renewal'].includes(c.mode??'')));
   const cliProfile=selected==='antigravity'&&accounts.some(a=>a.report?.source==='antigravity_cli_usage'||settings.connections.some(c=>c.id===a.account.id&&c.mode==='antigravity_cli_usage'));

@@ -411,6 +411,7 @@ fn input(provider: Provider) -> ConnectInput {
         region: String::new(),
         token: SECRET.into(),
         member_email: "member@example.test".into(),
+        session: false,
     }
 }
 #[tokio::test]

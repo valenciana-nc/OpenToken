@@ -41,4 +41,13 @@ describe('discovery-first provider capabilities',()=>{
     expect(devin).toContain('tracks one account at a time');
     expect(devin).toContain('Use existing Devin');
   });
+  it('offers a pasted Cursor session token, opened by default when adding an account',()=>{
+    const expired:AccountState={account:{id:'c',provider:'cursor',label:'c',email:null,sources:[]},status:'faulted',report:null,fault:{kind:'needs_relogin',message:'expired',retryAfterSecs:null}};
+    const signIn=renderToStaticMarkup(<ProviderConnection {...props} provider="cursor" accounts={[expired]}/>);
+    expect(signIn).toContain('Paste a Cursor session token instead');
+    expect(signIn).toContain('WorkosCursorSessionToken');
+    const add=renderToStaticMarkup(<ProviderConnection {...props} provider="cursor" adding/>);
+    expect(add).toMatch(/<details[^>]*open[^>]*><summary>Paste a Cursor session token instead/);
+    expect(add).toContain('type="password"');
+  });
 });

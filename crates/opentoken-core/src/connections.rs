@@ -74,6 +74,8 @@ pub enum ConnectionMode {
     #[default]
     Api,
     CursorApp,
+    /// A Cursor session token the user pasted from cursor.com, kept in the OS vault.
+    CursorSession,
     GithubCli,
     GrokCli,
     GrokCliRenewal,
@@ -167,6 +169,9 @@ pub fn validate_connections(connections: &[Connection]) -> Result<()> {
                                 )
                     })
             }
+            ConnectionMode::CursorSession => {
+                c.provider == Provider::Cursor && c.profile.is_none() && c.scope == "session"
+            }
             ConnectionMode::GrokCli | ConnectionMode::GrokCliRenewal => {
                 c.provider == Provider::Grok
                     && c.profile.as_deref().is_some_and(|p| {
@@ -224,7 +229,10 @@ pub fn validate_connections(connections: &[Connection]) -> Result<()> {
                 }))
             || (c.provider == Provider::Cursor
                 && !email(&c.login)
-                && !(c.mode == ConnectionMode::CursorApp && c.login == c.subject))
+                && !(matches!(
+                    c.mode,
+                    ConnectionMode::CursorApp | ConnectionMode::CursorSession
+                ) && c.login == c.subject))
             || (c.provider == Provider::Copilot && !github_login(&c.login))
         {
             bail!("Invalid secure connection metadata.");
@@ -242,6 +250,9 @@ pub struct ConnectInput {
     pub token: String,
     #[serde(default)]
     pub member_email: String,
+    /// Cursor only: `token` is the user's own pasted session token, not an Enterprise key.
+    #[serde(default)]
+    pub session: bool,
 }
 impl Drop for ConnectInput {
     fn drop(&mut self) {
@@ -338,6 +349,12 @@ impl Service {
         settings: &Settings,
         input: ConnectInput,
     ) -> Result<(Settings, AccountState)> {
+        if input.session {
+            if input.provider != Provider::Cursor {
+                bail!("Only Cursor supports a pasted session token.");
+            }
+            return self.connect_cursor_session(settings, &input.token).await;
+        }
         if !matches!(input.provider, Provider::Cursor | Provider::Copilot)
             && !reported::supported(input.provider)
         {
@@ -498,10 +515,9 @@ impl Service {
         if !settings.connections.iter().any(|c| c.id == id) {
             bail!("This OpenToken connection no longer exists.");
         }
-        let app_session = settings
-            .connections
-            .iter()
-            .any(|c| c.id == id && c.mode != ConnectionMode::Api);
+        let app_session = settings.connections.iter().any(|c| {
+            c.id == id && !matches!(c.mode, ConnectionMode::Api | ConnectionMode::CursorSession)
+        });
         let previous = if app_session {
             None
         } else {
@@ -577,6 +593,16 @@ impl Service {
         if c.mode == ConnectionMode::GithubCli {
             let result =
                 tokio::time::timeout(Duration::from_secs(45), self.fetch_github_personal(c))
+                    .await
+                    .unwrap_or_else(|_| Err(Fault::offline()));
+            if let Err(fault) = &result {
+                self.pause(c.provider, fault);
+            }
+            return result;
+        }
+        if c.mode == ConnectionMode::CursorSession {
+            let result =
+                tokio::time::timeout(Duration::from_secs(45), self.fetch_cursor_session(c))
                     .await
                     .unwrap_or_else(|_| Err(Fault::offline()));
             if let Err(fault) = &result {

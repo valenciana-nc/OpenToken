@@ -156,6 +156,7 @@ async fn real_http_connect_storage_refresh_restart_and_disconnect_all_four() {
                     provider,
                     token: "synthetic-provider-api-key".into(),
                     member_email: String::new(),
+                    session: false,
                     region: String::new(),
                 },
             )

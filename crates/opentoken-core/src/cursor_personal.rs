@@ -129,6 +129,41 @@ fn subject(value: &str) -> Option<String> {
 fn expired() -> Fault {
     Fault::new(FaultKind::NeedsRelogin,"The Cursor app session is expired or invalid. Sign in again in Cursor, then reconnect. OpenToken never refreshes Cursor's tokens.")
 }
+/// Parse a session token the user pasted: the `WorkosCursorSessionToken` cookie
+/// value from cursor.com (`<user>%3A%3A<jwt>` or `<user>::<jwt>`), a full
+/// `WorkosCursorSessionToken=...` pair, or just the JWT.
+fn pasted_session(input: &str) -> Result<Session, Fault> {
+    let value = input.trim();
+    let value = value
+        .strip_prefix("WorkosCursorSessionToken=")
+        .unwrap_or(value);
+    let value = Zeroizing::new(value.replace("%3A%3A", "::").replace("%3a%3a", "::"));
+    let (user, jwt) = match value.split_once("::") {
+        Some((user, jwt)) => (Some(user), jwt),
+        None => (None, value.as_str()),
+    };
+    let session = Session::parse(Zeroizing::new(jwt.to_owned())).map_err(pasted_fault)?;
+    if user.is_some_and(|u| subject(u).as_deref() != Some(session.subject.as_str())) {
+        return Err(pasted_fault(expired()));
+    }
+    Ok(session)
+}
+/// Pasted-token faults point at cursor.com, not at the Cursor app.
+fn pasted_fault(mut f: Fault) -> Fault {
+    if f.message.contains("expired on") {
+        f.message = f
+            .message
+            .split(". ")
+            .next()
+            .unwrap_or_default()
+            .replace("Cursor's saved sign-in", "Your pasted Cursor session token")
+            + ". Copy a fresh WorkosCursorSessionToken from cursor.com and paste it again.";
+    } else {
+        f.kind = FaultKind::NeedsRelogin;
+        f.message = "That isn't a valid Cursor session token. On cursor.com (signed in), copy the value of the WorkosCursorSessionToken cookie and paste it here.".into();
+    }
+    f
+}
 fn encrypted() -> Fault {
     Fault::new(FaultKind::PermissionDenied,"This Cursor version encrypts its saved sign-in, so OpenToken can no longer read personal Cursor usage from the app. Your Cursor login is fine; signing in again won't change this. Cursor Enterprise members can still connect with an admin API key.")
 }
@@ -445,6 +480,110 @@ impl Service {
             f.message=format!("Cursor {stage}: {}",f.message); f
         })?.ok_or_else(invalid)?;
         serde_json::from_value(value).map_err(|_|Fault::new(FaultKind::Unreadable,format!("Cursor {stage} returned an unsupported response format. No account or quota was inferred.")))
+    }
+    /// Identity check, usage summary and identity recheck with one session.
+    async fn cursor_dashboard(
+        &self,
+        session: &Session,
+        expected_login: Option<&str>,
+    ) -> Result<(String, Report), Fault> {
+        let me = || session.request(&self.http, &self.personal.base, "/api/auth/me");
+        let before: User = self.cursor_json(me()?, "account identity").await?;
+        let login = before
+            .email
+            .as_deref()
+            .unwrap_or(&session.subject)
+            .to_owned();
+        if before.identity()? != session.subject
+            || expected_login.is_some_and(|l| !l.eq_ignore_ascii_case(&login))
+        {
+            return Err(Fault::changed());
+        }
+        let summary: Summary = self
+            .cursor_json(
+                session.request(&self.http, &self.personal.base, "/api/usage-summary")?,
+                "usage summary",
+            )
+            .await?;
+        let after: User = self.cursor_json(me()?, "account recheck").await?;
+        if after.identity()? != session.subject
+            || !after
+                .email
+                .as_deref()
+                .unwrap_or(&session.subject)
+                .eq_ignore_ascii_case(&login)
+        {
+            return Err(Fault::changed());
+        }
+        let report = report(summary).map_err(|mut f| {
+            f.message = format!("Cursor allowance / billing period: {}", f.message);
+            f
+        })?;
+        Ok((login, report))
+    }
+    /// Connect personal Cursor usage with a session token the user pasted.
+    pub(super) async fn connect_cursor_session(
+        &self,
+        settings: &Settings,
+        token: &str,
+    ) -> Result<(Settings, AccountState)> {
+        let session = pasted_session(token)?;
+        self.begin_verification(Provider::Cursor)?;
+        let result = tokio::time::timeout(
+            Duration::from_secs(45),
+            self.cursor_dashboard(&session, None),
+        )
+        .await
+        .unwrap_or_else(|_| Err(Fault::offline()));
+        if let Err(f) = &result {
+            self.pause(Provider::Cursor, f);
+        }
+        let (login, report) = result?;
+        let mut connection = Connection::new(
+            Provider::Cursor,
+            session.subject.clone(),
+            login,
+            "session".into(),
+        );
+        connection.mode = ConnectionMode::CursorSession;
+        let mut next = settings.clone();
+        next.connections.retain(|c| c.id != connection.id);
+        next.connections.push(connection.clone());
+        next.validate()?;
+        let previous = self.vault.read(&connection.id)?;
+        self.vault.write(&connection.id, &session.token)?;
+        if self.storage.save_settings(&next).is_err() {
+            self.restore_secret(&connection.id, previous.as_deref())?;
+            bail!("The Cursor connection could not be saved. The previous token was restored.");
+        }
+        Ok((
+            next.clone(),
+            AccountState::apply(connection.account(&next), Ok(report), None),
+        ))
+    }
+    pub(super) async fn fetch_cursor_session(&self, c: &Connection) -> Result<Report, Fault> {
+        let token = self
+            .vault
+            .read(&c.id)
+            .map_err(|_| {
+                Fault::new(
+                    FaultKind::Unreadable,
+                    "Windows could not read the saved Cursor session token.",
+                )
+            })?
+            .ok_or_else(|| {
+                Fault::new(
+                    FaultKind::NotSignedIn,
+                    "The saved Cursor session token is missing. Paste it again.",
+                )
+            })?;
+        let session = pasted_session(&Zeroizing::new(token))?;
+        if session.subject != c.subject {
+            return Err(Fault::changed());
+        }
+        self.cursor_dashboard(&session, Some(&c.login))
+            .await
+            .map(|(_, r)| r)
     }
     pub(super) async fn cursor_app_read(
         &self,
