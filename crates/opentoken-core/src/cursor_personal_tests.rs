@@ -816,3 +816,71 @@ fn an_encrypted_cursor_sign_in_is_reported_as_unsupported_not_expired() {
     assert!(fault.message.contains("encrypts its saved sign-in"));
     assert!(!fault.message.contains("expired"));
 }
+#[derive(Default)]
+struct PasteVault(Mutex<std::collections::HashMap<String, String>>);
+impl CredentialStore for PasteVault {
+    fn read(&self, id: &str) -> anyhow::Result<Option<String>> {
+        Ok(self.0.lock().unwrap().get(id).cloned())
+    }
+    fn write(&self, id: &str, secret: &str) -> anyhow::Result<()> {
+        self.0.lock().unwrap().insert(id.into(), secret.into());
+        Ok(())
+    }
+    fn delete(&self, id: &str) -> anyhow::Result<()> {
+        self.0.lock().unwrap().remove(id);
+        Ok(())
+    }
+}
+#[tokio::test]
+async fn a_pasted_cursor_session_token_connects_reads_and_disconnects() {
+    let mut h = harness("ok").await;
+    let vault = Arc::new(PasteVault::default());
+    let personal = h.service.personal.clone();
+    h.service = Service::new(
+        Storage {
+            dir: h.dir.path().join("opentoken-paste"),
+            user_home: h.dir.path().into(),
+        },
+        vault.clone(),
+    );
+    h.service.personal = personal;
+    let jwt = live_token();
+    let (settings, state) = h
+        .service
+        .connect_cursor_session(
+            &Settings::default(),
+            &format!("  WorkosCursorSessionToken=user_fixture%3A%3A{jwt}  "),
+        )
+        .await
+        .unwrap();
+    let c = &settings.connections[0];
+    assert_eq!(c.mode, ConnectionMode::CursorSession);
+    assert_eq!(c.login, "personal@example.test");
+    assert!(state.report.is_some());
+    assert_eq!(vault.read(&c.id).unwrap().as_deref(), Some(jwt.as_str()));
+    assert!(h.service.fetch(c).await.is_ok());
+    let next = h.service.disconnect(&settings, &c.id).unwrap();
+    assert!(next.connections.is_empty());
+    assert!(vault.read(&c.id).unwrap().is_none());
+}
+#[test]
+fn pasted_tokens_are_checked_and_explained() {
+    let jwt = live_token();
+    assert!(pasted_session(&jwt).is_ok());
+    assert!(pasted_session(&format!("user_fixture::{jwt}")).is_ok());
+    let wrong_user = pasted_session(&format!("user_other%3A%3A{jwt}"))
+        .err()
+        .unwrap();
+    assert!(wrong_user
+        .message
+        .contains("isn't a valid Cursor session token"));
+    let old = pasted_session(&token("user_fixture", 1_700_000_000))
+        .err()
+        .unwrap();
+    assert!(
+        old.message
+            .contains("pasted Cursor session token expired on Nov 14, 2023"),
+        "{}",
+        old.message
+    );
+}

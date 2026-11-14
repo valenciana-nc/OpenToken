@@ -15,6 +15,19 @@ import MuseSubscription from './MuseSubscription';
 import AntigravityRecovery from './AntigravityRecovery';
 import GrokConnection from './GrokConnection';
 
+/** Personal Cursor usage from a session token the user copies from cursor.com. */
+function CursorSessionPaste({busy,action,changed,open=false}:{busy:boolean;action:Action;changed:(next:Settings)=>Promise<void>;open?:boolean}){
+  const [token,setToken]=useState('');const hint=useId();
+  async function connect(){const submitted=token;setToken('');const next=await command<Settings>('connect_provider',{input:{provider:'cursor',token:submitted,session:true}});await changed(next);}
+  return <details className="connection-context cursor-session-paste" open={open}><summary>Paste a Cursor session token instead</summary>
+    <ol className="hint" id={hint}><li>Open <b>cursor.com</b> in your browser and sign in with the account to track.</li><li>Open developer tools (F12) → Application (Chrome/Edge) or Storage (Firefox) → Cookies → https://cursor.com.</li><li>Copy the value of <b>WorkosCursorSessionToken</b> and paste it below.</li></ol>
+    <form onSubmit={e=>{e.preventDefault();void action(connect,'Cursor connected with your session token.');}}>
+      <label>Cursor session token<input type="password" autoComplete="off" spellCheck={false} autoCapitalize="none" value={token} minLength={16} maxLength={4096} required disabled={busy} aria-describedby={hint} onChange={e=>setToken(e.target.value)}/></label>
+      <button className="primary" type="submit" disabled={busy||token.trim().length<16}>Connect Cursor</button>
+    </form>
+    <p className="hint">Treat this token like a password: it is stored only in Windows Credential Manager and sent only to cursor.com. It expires after a while; paste a fresh one when OpenToken says so. Each different account you paste is tracked separately.</p>
+  </details>;
+}
 type Props={provider:ProviderId;busy:boolean;action:Action;changed:(next:Settings)=>Promise<void>;accounts?:AccountState[];adding?:boolean};
 function AuthenticationOptions({ provider, busy, action, changed,initialMode,back,hideAdvanced=false }: Props&{initialMode?:'enterprise'|'billing';back?:()=>void;hideAdvanced?:boolean}) {
   const [token, setToken] = useState('');
@@ -54,7 +67,8 @@ function AuthenticationOptions({ provider, busy, action, changed,initialMode,bac
       {signingIn ? 'Signing in…' : 'Sign in with Cursor'}
     </button>
     <span className="visually-hidden" id={hint}>{cursorDescription}</span>
-    <p className="muted-text">This opens the Cursor app. Sign in there with the account you want to track. OpenToken reads usage from the Cursor app’s sign-in and connects automatically once you’re signed in.</p>
+    <p className="muted-text">This opens the Cursor app. Sign in there with the account you want to track. OpenToken reads usage from the Cursor app’s sign-in and connects automatically once you’re signed in. Newer Cursor versions encrypt that sign-in; if so, paste a session token below.</p>
+    <CursorSessionPaste busy={busy} action={action} changed={changed}/>
     {demo && <small className="sign-in-demo">Sample connection · no real credentials</small>}
     {login.status.phase !== 'idle' && <p className={`sign-in-status ${login.status.phase === 'error' ? 'error' : ''}`} role="status" aria-label="Cursor sign-in status">{login.status.message}</p>}
     {cursorLoginCancellable(login.status) && <button className="text-button" type="button" onClick={() => void login.cancel()}>Cancel sign-in</button>}
@@ -85,7 +99,8 @@ function AddAccount(props:Props){
   const {provider}=props;const name=providerDefinition(provider).name;
   if(provider==='grok')return <GrokConnection busy={props.busy} action={props.action} changed={props.changed} adding/>;
   if(multiAccount.includes(provider))return <AuthenticationOptions {...props} hideAdvanced/>;
-  return <><p className="muted-text">{provider==='cursor'?'Personal Cursor tracks the account signed in to the Cursor app, one at a time. To track a different personal account, sign in to Cursor with it. To track more team members, use Enterprise setup.':`${name} follows the account currently signed in to its official app or CLI, so it tracks one account at a time. To track a different account, sign in with it there, then press “Use existing ${name}”.`}</p><ConnectionOptions {...props} adding={false}/></>;
+  if(provider==='cursor')return <><p className="muted-text">To add another personal Cursor account, paste its session token. Team members can be added through Enterprise setup.</p><CursorSessionPaste busy={props.busy} action={props.action} changed={props.changed} open/><ConnectionOptions {...props} adding={false}/></>;
+  return <><p className="muted-text">{`${name} follows the account currently signed in to its official app or CLI, so it tracks one account at a time. To track a different account, sign in with it there, then press “Use existing ${name}”.`}</p><ConnectionOptions {...props} adding={false}/></>;
 }
 export default function ProviderConnection(props:Props){return props.adding?<AddAccount {...props}/>:<ConnectionOptions {...props}/>;}
 function ConnectionOptions(props:Props){const[advanced,setAdvanced]=useState<'enterprise'|'billing'|null>(null);const needs=signInNeeded(props.accounts??[],props.provider);if(advanced)return <AuthenticationOptions {...props} key={advanced} initialMode={advanced} back={()=>setAdvanced(null)}/>;if(['devin','antigravity','muse'].includes(props.provider))return <><ExistingConnection {...props} needsSignIn={needs}/>{props.provider==='antigravity'&&<AntigravityRecovery {...props} needsSignIn={needs}/>}{props.provider==='muse'&&<><ExistingConnection {...props} historyOnly/><MuseSubscription {...props}/></>}</>;if(props.provider==='kimi')return <><ExistingConnection {...props} historyOnly/><AuthenticationOptions {...props}/></>;if(['codex','claude','cursor','copilot','grok','muse'].includes(props.provider))return <><ExistingConnection {...props} needsSignIn={needs} recovery={<AuthenticationOptions {...props} hideAdvanced/>}/>{props.provider==='grok'&&<ExistingConnection {...props} historyOnly/>}{props.provider==='cursor'&&<button className="connection-advanced-toggle" disabled={props.busy} onClick={()=>setAdvanced('enterprise')}>Enterprise setup<ChevronRight size={12}/></button>}{props.provider==='copilot'&&<button className="connection-advanced-toggle" disabled={props.busy} onClick={()=>setAdvanced('billing')}>Advanced personal billing<ChevronRight size={12}/></button>}</>;return <AuthenticationOptions {...props}/>;}
